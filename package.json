@@ -3,10 +3,25 @@
   "private": true,
   "version": "0.1.0",
   "description": "Transfert de fichiers local entre desktop et mobile",
-  "workspaces": ["packages/*", "apps/desktop"],
+  "workspaces": [
+    "packages/*",
+    "apps/desktop"
+  ],
   "scripts": {
     "dev:desktop": "npm run dev -w @castflow/desktop",
     "dev:mobile": "cd apps/mobile && npx expo start",
-    "build:shared": "npm run build -w @castflow/shared"
+    "build:shared": "npm run build -w @castflow/shared",
+    "build:desktop": "npm run build -w @castflow/desktop",
+    "check:syntax": "node scripts/check-syntax.js",
+    "check:protocol": "node scripts/check-protocol.js",
+    "check:mobile": "node scripts/check-mobile-config.js",
+    "test:core": "node apps/desktop/test/core.test.js",
+    "test:e2e": "node apps/desktop/test/e2e.test.js",
+    "test": "npm run check:syntax && npm run check:protocol && npm run check:mobile && npm run test:core && npm run test:e2e",
+    "ci": "npm run test && npm run build:shared && npm run build:desktop"
+  },
+  "devDependencies": {
+    "@babel/parser": "7.26.2",
+    "typescript": "5.6.3"
   }
 }

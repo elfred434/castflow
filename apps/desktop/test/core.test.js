@@ -324,7 +324,25 @@ test('collision de nom → suffixe (1)', async () => {
   await server.stop();
 });
 
+/** Certains conteneurs CI interdisent le broadcast UDP : on le détecte avant de tester. */
+function broadcastAvailable() {
+  return new Promise((resolve) => {
+    const dgram = require('node:dgram');
+    const s = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+    const done = (v) => { try { s.close(); } catch {} resolve(v); };
+    s.on('error', () => done(false));
+    s.bind(0, () => {
+      try { s.setBroadcast(true); } catch { return done(false); }
+      s.send(Buffer.from('x'), 0, 1, 54999, '255.255.255.255', (err) => done(!err));
+    });
+  });
+}
+
 test('découverte UDP : deux appareils se voient', async () => {
+  if (!(await broadcastAvailable())) {
+    console.log('    (ignoré : broadcast UDP indisponible dans cet environnement)');
+    return;
+  }
   const a = new Discovery({
     device: { id: 'dev-a', name: 'PC A', platform: 'linux', kind: 'desktop' },
     httpPort: 53317, wsPort: 53318, port: 54547,

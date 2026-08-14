@@ -30,8 +30,18 @@ check('permissions Android requises', () => {
 });
 
 check('HTTP en clair autorisé sur le réseau local', () => {
-  // Sans cela, Android 9+ bloque les requêtes http:// vers le PC.
-  assert.equal(app.android?.usesCleartextTraffic, true, 'android.usesCleartextTraffic doit être true');
+  // Depuis Expo SDK 51, ce réglage passe par expo-build-properties : le champ
+  // android.usesCleartextTraffic n'appartient pas au schéma app.json.
+  const buildProperties = (app.plugins ?? []).find((plugin) => (
+    Array.isArray(plugin) && plugin[0] === 'expo-build-properties'
+  ));
+  assert.equal(
+    buildProperties?.[1]?.android?.usesCleartextTraffic,
+    true,
+    'expo-build-properties.android.usesCleartextTraffic doit être true',
+  );
+  assert.ok(pkg.dependencies?.['expo-build-properties'], 'dépendance expo-build-properties manquante');
+
   const ats = app.ios?.infoPlist?.NSAppTransportSecurity;
   assert.ok(ats?.NSAllowsLocalNetworking, 'iOS : NSAllowsLocalNetworking requis');
   assert.ok(app.ios?.infoPlist?.NSLocalNetworkUsageDescription, 'iOS : NSLocalNetworkUsageDescription requis');

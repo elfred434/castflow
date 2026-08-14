@@ -23,7 +23,6 @@
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE"
       ],
-      "usesCleartextTraffic": true,
       "versionCode": 1,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
@@ -56,6 +55,14 @@
         "expo-media-library",
         {
           "savePhotosPermission": "Enregistrer les fichiers reçus."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
         }
       ]
     ],

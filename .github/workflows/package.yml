@@ -1,92 +1,166 @@
-# ==========================================================================
-# CastFlow — Packaging des applications de bureau
+# ============================================================================
+# CastFlow — installateurs Windows et Android
 #
-# Produit les installateurs pour Linux, Windows et macOS. Déclenché
-# manuellement, ou automatiquement sur un tag de version.
+# Produit :
+#   - dist/release/*.exe  (installateur NSIS + version portable Electron)
+#   - dist/release/*.apk  (APK Android installable, build React Native release)
 #
-# Les artefacts sortent dans dist/release/ (et non release/) : ce chemin est
-# déjà ignoré par git et par les outils, ce qui évite d'embarquer ~100 Mo de
-# binaires Electron dans le dépôt ou les sauvegardes.
-# ==========================================================================
+# Le workflow est lancé manuellement ou lors de la création d'un tag v*.
+# ============================================================================
 
-name: Package
+name: Installateurs Windows et Android
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      platforms:
-        description: Plateformes à construire
-        required: false
-        default: all
-        type: choice
-        options: [all, linux, windows, macos]
 
 permissions:
   contents: read
 
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
-  npm_config_fund: "false"
   npm_config_audit: "false"
+  npm_config_fund: "false"
 
 jobs:
-  package:
-    name: ${{ matrix.label }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            label: Linux (AppImage + deb)
-            script: pack:linux
-            artifact: castflow-linux
-            pattern: |
-              dist/release/*.AppImage
-              dist/release/*.deb
-          - os: windows-latest
-            label: Windows (installateur + portable)
-            script: pack:win
-            artifact: castflow-windows
-            pattern: |
-              dist/release/*.exe
-          - os: macos-latest
-            label: macOS (dmg + zip)
-            script: pack:mac
-            artifact: castflow-macos
-            pattern: |
-              dist/release/*.dmg
-              dist/release/*.zip
-
+  verify:
+    name: Tests et builds de contrôle
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - name: Récupération du dépôt
+        uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v7
+      - name: Installation de Node.js
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
 
-      # Ici on a besoin du binaire Electron, contrairement aux jobs de test
-      # qui posent ELECTRON_SKIP_BINARY_DOWNLOAD pour gagner ~100 Mo.
+      - name: Installation des dépendances desktop
+        run: npm ci --prefer-offline --no-audit --no-fund
+        env:
+          # Les tests et le build Vite n'ont pas besoin du binaire Electron.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Suite complète
+        run: npm test
+
+      - name: Builds partagés et desktop
+        run: npm run build:shared && npm run build:desktop
+
+  windows:
+    name: Windows (.exe)
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - name: Récupération du dépôt
+        uses: actions/checkout@v6
+
+      - name: Installation de Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
       - name: Installation des dépendances
         run: npm ci --no-audit --no-fund
 
-      - name: Construction de l'installateur
-        run: npm run ${{ matrix.script }}
+      - name: Construction NSIS et portable
+        run: npm run pack:win
         env:
-          # Pas de signature de code : évite qu'electron-builder cherche
-          # des certificats absents et échoue.
+          # Le workflow produit des binaires non signés tant qu'aucun certificat
+          # Windows n'est configuré dans electron-builder.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      - name: Inventaire des fichiers produits
-        shell: bash
-        run: ls -lh dist/release/
+      - name: Vérification des exécutables
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -Path "dist/release/*.exe" -File)
+          if ($files.Count -lt 1) {
+            throw "Aucun .exe produit dans dist/release/"
+          }
+          $files | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            "{0}  {1}  SHA256:{2}" -f $_.Name, $_.Length, $hash
+          }
 
-      - name: Publication
+      - name: Publication des .exe
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.pattern }}
-          retention-days: 14
+          name: castflow-windows-${{ github.run_number }}
+          path: dist/release/*.exe
+          retention-days: 30
+          if-no-files-found: error
+
+  android:
+    name: Android (.apk)
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupération du dépôt
+        uses: actions/checkout@v6
+
+      - name: Installation de Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+
+      - name: Installation de Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Installation du SDK Android
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools platforms;android-34 build-tools;34.0.0"
+
+      - name: Cache Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Installation reproductible des dépendances mobiles
+        run: npm ci --prefix apps/mobile --no-audit --no-fund
+
+      - name: Vérification des versions Expo
+        working-directory: apps/mobile
+        run: npx expo install --check
+
+      - name: Génération du projet Android natif
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --clean --no-install
+        env:
+          CI: "1"
+
+      - name: Construction de l'APK release
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Préparation de l'artefact
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_apk="apps/mobile/android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$source_apk" || {
+            echo "::error::APK introuvable ou vide : $source_apk"
+            exit 1
+          }
+          mkdir -p dist/release
+          cp "$source_apk" "dist/release/CastFlow-Android-${GITHUB_RUN_NUMBER}.apk"
+          ls -lh dist/release/*.apk
+          sha256sum dist/release/*.apk
+          unzip -t dist/release/*.apk >/dev/null
+
+      - name: Publication de l'APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: castflow-android-${{ github.run_number }}
+          path: dist/release/*.apk
+          retention-days: 30
           if-no-files-found: error

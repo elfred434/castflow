@@ -76,9 +76,11 @@ et sur chaque pull request vers `main`, `master` ou `develop`.
 | `verify` | `check:syntax` | Parse tout le JS/JSX, y compris le mobile non installé en CI |
 | `verify` | `check:protocol` | Bloque toute divergence de ports, version ou messages entre desktop et mobile |
 | `verify` | `check:mobile` | Valide permissions Android/iOS et configuration Expo |
+| `verify` | `check:packaging` | Valide electron-builder, les cibles et l'icône desktop |
 | `verify` | `build:shared` | Compile le paquet TypeScript partagé |
 | `test` | `test:core` | 13 tests d'intégration du serveur — sur Node 22 **et** 24 |
 | `test` | `test:e2e` | 9 tests bout-en-bout mobile ↔ desktop — sur Node 22 **et** 24 |
+| `test` | `test:hash` + `test:receive` | 15 tests d'intégrité et de réception — sur Node 22 **et** 24 |
 | `build` | `build:desktop` | Build Vite, publié en artefact téléchargeable (7 jours) |
 
 Le job `build` attend que `verify` et `test` réussissent (`needs`), et un nouveau push
@@ -99,15 +101,27 @@ npm run pack:win     # installateur NSIS + portable
 npm run pack:mac     # .dmg + .zip (x64 et Apple Silicon)
 ```
 
-Les fichiers atterrissent dans `dist/release/` (dossier ignoré par git). Le workflow `.github/workflows/package.yml`
-construit les trois plateformes en parallèle sur un tag, ou à la demande.
+Les fichiers desktop atterrissent dans `dist/release/` (dossier ignoré par git).
+Le workflow `.github/workflows/package.yml`, lancé sur un tag `v*` ou manuellement,
+rejoue les 37 tests puis produit deux artefacts téléchargeables :
 
-Pour l'APK Android :
+- les `.exe` Windows (installateur NSIS et version portable) ;
+- l'APK Android release, généré localement par Gradle dans le runner GitHub.
+
+Le build Android est reproductible grâce à `apps/mobile/package-lock.json`. Pour un
+build local équivalent :
 
 ```bash
+npm ci --prefix apps/mobile
 cd apps/mobile
-npx eas build -p android --profile preview   # APK installable
+CI=1 npx expo prebuild --platform android --clean --no-install
+cd android && ./gradlew assembleRelease
 ```
+
+Le profil EAS reste disponible avec
+`npx eas build -p android --profile preview`. Les binaires CI ne sont pas signés pour
+une distribution publique : prévoir un certificat Windows et une clé Android de
+production avant publication en store.
 
 ### Publier une version
 
@@ -171,7 +185,7 @@ castflow/
 - [x] Réception côté mobile (desktop → mobile) avec offres et téléchargement
 - [x] Vérification d'intégrité FNV-1a 64 bits, identique desktop et mobile
 - [x] Packaging desktop : AppImage, deb, exe, dmg — icônes incluses
-- [x] Configuration EAS pour l'APK Android
+- [x] Workflow GitHub Actions pour les `.exe` Windows et l'APK Android
 - [x] Tests d'intégration et bout-en-bout (37 au total)
 - [ ] Wi-Fi Direct natif (Android `WifiP2pManager`)
 - [ ] WebRTC DataChannel (signalisation déjà en place)

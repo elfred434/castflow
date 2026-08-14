@@ -26,17 +26,17 @@ jobs:
     name: Vérifier et publier
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Installation des dépendances
         run: npm ci --prefer-offline --no-audit --no-fund
 
-      - name: Suite complète (vérifications + 22 tests)
+      - name: Suite complète (vérifications + 37 tests)
         run: npm test
 
       - name: Build de production
@@ -50,7 +50,7 @@ jobs:
           ls -lh castflow-desktop-*.zip
 
       - name: Publication de l'artefact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: castflow-desktop-${{ github.ref_name }}
           path: castflow-desktop-*.zip
@@ -68,8 +68,8 @@ jobs:
 
             Transfert de fichiers local entre desktop et mobile.
 
-            Cette version a passé les 22 tests automatisés (serveur, sécurité,
-            reprise de transfert, et bout-en-bout mobile ↔ desktop).
+            Cette version a passé les 37 tests automatisés (serveur, sécurité,
+            reprise, intégrité, réception et bout-en-bout mobile ↔ desktop).
 
             **Contenu de l'archive** : interface desktop compilée.
             Pour lancer l'application complète, voir le README.

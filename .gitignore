@@ -1,0 +1,34 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub/
+.pub-cache/
+build/
+coverage/
+
+# IDE et OS
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+*.log
+
+# Android local et signatures
+android/.gradle/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+
+# Windows généré
+windows/flutter/ephemeral/
+
+# Installateurs et artefacts
+dist/
+release/
+
+# Secrets
+.env

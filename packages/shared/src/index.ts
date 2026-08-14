@@ -136,6 +136,7 @@ export type MessageType =
   | 'PROGRESS'
   | 'FILE_DONE'
   | 'TRANSFER_COMPLETE'
+  | 'OFFER'
   | 'TRANSFER_CANCEL'
   | 'PING'
   | 'PONG'
@@ -177,6 +178,12 @@ export interface TransferAcceptData {
 export interface TransferRejectData { transferId: string; reason: string }
 export interface ProgressData extends TransferProgress { transferId: string }
 export interface FileDoneData { transferId: string; fileId: string; hashOk: boolean }
+export interface OfferData {
+  transferId: string;
+  totalSize: number;
+  files: Array<{ id: string; name: string; size: number; mime: string; token: string }>;
+}
+
 export interface TransferCompleteData {
   transferId: string;
   files: string[];
@@ -195,6 +202,7 @@ export type ErrorCode =
   | 'NO_SPACE'
   | 'VERSION_MISMATCH'
   | 'AUTH_REQUIRED'
+  | 'HASH_MISMATCH'
   | 'INTERNAL';
 
 /* ------------------------------------------------------------------ */

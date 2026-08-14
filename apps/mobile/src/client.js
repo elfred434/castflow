@@ -158,6 +158,70 @@ export function parseWifiPayload(raw) {
 /* Formatage                                                           */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Empreinte FNV-1a 64 — identique bit à bit à celle du desktop        */
+/* ------------------------------------------------------------------ */
+
+const P_LOW = 0x1b3;
+const P_HIGH = 0x100; // le prime fait 41 bits : mot haut = 0x100, pas 1
+const TWO32 = 4294967296;
+
+export function fnv1a64Init() {
+  return { h1: 0xcbf29ce4, h0: 0x84222325 };
+}
+
+export function fnv1a64Update(state, bytes) {
+  let { h1, h0 } = state;
+  for (let i = 0; i < bytes.length; i++) {
+    h0 = (h0 ^ bytes[i]) >>> 0;
+    const low = h0 * P_LOW;
+    const carry = Math.floor(low / TWO32);
+    const high = h1 * P_LOW + h0 * P_HIGH + carry;
+    h0 = low % TWO32;
+    h1 = high % TWO32;
+  }
+  state.h1 = h1 >>> 0;
+  state.h0 = h0 >>> 0;
+  return state;
+}
+
+export function fnv1a64Digest(state) {
+  const hi = (state.h1 >>> 0).toString(16).padStart(8, '0');
+  const lo = (state.h0 >>> 0).toString(16).padStart(8, '0');
+  return `fnv1a64:${hi}${lo}`;
+}
+
+/** Empreinte d'un Uint8Array/Buffer. */
+export function hashBytes(bytes) {
+  return fnv1a64Digest(fnv1a64Update(fnv1a64Init(), bytes));
+}
+
+/** Empreinte d'une chaîne base64 (format renvoyé par expo-file-system). */
+export function hashBase64(b64) {
+  const state = fnv1a64Init();
+  const lookup = {};
+  for (let i = 0; i < B64.length; i++) lookup[B64[i]] = i;
+  const clean = b64.replace(/[^A-Za-z0-9+/]/g, '');
+  const chunk = new Uint8Array(3);
+  for (let i = 0; i < clean.length; i += 4) {
+    const n0 = lookup[clean[i]] ?? 0;
+    const n1 = lookup[clean[i + 1]] ?? 0;
+    const n2 = lookup[clean[i + 2]];
+    const n3 = lookup[clean[i + 3]];
+    chunk[0] = (n0 << 2) | (n1 >> 4);
+    let len = 1;
+    if (n2 !== undefined) { chunk[1] = ((n1 & 15) << 4) | (n2 >> 2); len = 2; }
+    if (n3 !== undefined) { chunk[2] = ((n2 & 3) << 6) | n3; len = 3; }
+    fnv1a64Update(state, chunk.subarray(0, len));
+  }
+  return fnv1a64Digest(state);
+}
+
+export function hashMatches(expected, actual) {
+  if (!expected) return true;
+  return String(expected).toLowerCase() === String(actual).toLowerCase();
+}
+
 export function formatBytes(n) {
   if (!n) return '0 o';
   if (n < 1024) return `${Math.round(n)} o`;
@@ -333,7 +397,15 @@ export class CastFlowClient {
 
     const res = await this.request(envelope('TRANSFER_REQUEST', {
       transferId,
-      files: files.map((f) => ({ id: f.id, name: f.name, size: f.size, mime: f.mime || guessMime(f.name) })),
+      files: files.map((f) => ({
+        id: f.id,
+        name: f.name,
+        size: f.size,
+        mime: f.mime || guessMime(f.name),
+        // Empreinte facultative : si elle est fournie, le receveur rejette
+        // tout fichier corrompu en transit.
+        ...(f.hash ? { hash: f.hash } : {}),
+      })),
       totalSize,
     }), 120000); // l'utilisateur distant doit accepter
 
@@ -397,6 +469,64 @@ export class CastFlowClient {
     }
     onProgress?.(file.size);
     return res;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Réception : le PC propose des fichiers, le mobile les télécharge  */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Liste les fichiers qu'un transfert entrant met à disposition.
+   * Le desktop annonce l'offre via le message OFFER sur le WebSocket.
+   */
+  async listOffer(transferId) {
+    const res = await fetch(`${this.httpBase}/offer/${transferId}`);
+    if (!res.ok) throw new Error(`Offre introuvable (${res.status})`);
+    return res.json();
+  }
+
+  /**
+   * Télécharge un fichier offert vers le stockage local.
+   * `deps.downloadFile` est fourni par l'app (expo-file-system) ; en test on
+   * retombe sur fetch + écriture par le harnais.
+   */
+  async downloadOne(transferId, file, { onProgress, targetDir } = {}) {
+    const url = `${this.httpBase}/download/${transferId}/${file.id}`;
+    if (this.deps.downloadFile) {
+      return this.deps.downloadFile({
+        url, file, token: file.token, targetDir, onProgress,
+      });
+    }
+    const res = await fetch(url, { headers: { 'X-CastFlow-Token': file.token } });
+    if (!res.ok) throw new Error(`Téléchargement échoué (${res.status})`);
+    const buf = new Uint8Array(await res.arrayBuffer());
+    onProgress?.(buf.length);
+    if (file.hash && !hashMatches(file.hash, hashBytes(buf))) {
+      throw new Error(`Intégrité invalide pour ${file.name}`);
+    }
+    return buf;
+  }
+
+  /** Télécharge toute une offre, séquentiellement pour ménager la mémoire. */
+  async receiveFiles(transferId, files, { onProgress, targetDir } = {}) {
+    const totalSize = files.reduce((s, f) => s + (f.size || 0), 0);
+    const started = Date.now();
+    let doneBytes = 0;
+    const results = [];
+
+    for (const f of files) {
+      const r = await this.downloadOne(transferId, f, {
+        targetDir,
+        onProgress: (received) => onProgress?.({
+          transferId, fileId: f.id, fileReceived: received, fileSize: f.size,
+          totalReceived: doneBytes + received, totalSize,
+          bps: (doneBytes + received) / Math.max(0.001, (Date.now() - started) / 1000),
+        }),
+      });
+      doneBytes += f.size || 0;
+      results.push(r);
+    }
+    return results;
   }
 
   cancel(transferId) {

@@ -56,8 +56,8 @@ const transfers = [
     peer: devices[0], startedAt: Date.now() - 120000, finishedAt: Date.now() - 90000,
     totalSize: 48234496, transferred: 48234496, bps: 0,
     files: [
-      { id: 'a', name: 'vacances-ouidah.mp4', size: 41943040, mime: 'video/mp4', received: 41943040, done: true },
-      { id: 'b', name: 'plage.jpg', size: 6291456, mime: 'image/jpeg', received: 6291456, done: true },
+      { id: 'a', name: 'vacances-ouidah.mp4', size: 41943040, mime: 'video/mp4', received: 41943040, done: true, hashOk: true, hash: 'fnv1a64:9a3f2b1c4d5e6f70' },
+      { id: 'b', name: 'plage.jpg', size: 6291456, mime: 'image/jpeg', received: 6291456, done: true, hashOk: true, hash: 'fnv1a64:1122334455667788' },
     ],
   },
 ];
@@ -88,7 +88,10 @@ function simulateIncoming() {
       }
       t.transferred = t.files.reduce((s, f) => s + f.received, 0);
       t.bps = 11.4 * 1024 * 1024;
-      t.files.forEach((f) => { f.done = f.received >= f.size; });
+      t.files.forEach((f) => {
+        f.done = f.received >= f.size;
+        if (f.done && f.hashOk === undefined) f.hashOk = true; // intégrité vérifiée
+      });
       if (t.files.every((f) => f.done)) {
         t.state = 'completed';
         t.finishedAt = Date.now();

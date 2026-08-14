@@ -7,16 +7,104 @@
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && electron .\"",
     "dev:web": "vite",
     "test": "node test/core.test.js",
-    "build": "vite build"
+    "build": "vite build",
+    "pack:dir": "npm run build && electron-builder --dir",
+    "pack:linux": "npm run build && electron-builder --linux AppImage deb",
+    "pack:win": "npm run build && electron-builder --win nsis portable",
+    "pack:mac": "npm run build && electron-builder --mac dmg zip",
+    "pack:all": "npm run build && electron-builder -mwl"
   },
-  "dependencies": { "ws": "^8.18.0", "qrcode": "^1.5.4" },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  },
   "devDependencies": {
-    "electron": "^32.0.0",
-    "vite": "^5.4.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^9.0.0",
+    "electron": "^32.0.0",
+    "electron-builder": "^25.1.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "concurrently": "^9.0.0",
+    "vite": "^5.4.0",
     "wait-on": "^8.0.0"
+  },
+  "description": "Transfert de fichiers local entre ordinateur et mobile",
+  "author": {
+    "name": "Elfred",
+    "email": "elfred@castflow.app"
+  },
+  "license": "MIT",
+  "build": {
+    "appId": "com.elfred.castflow",
+    "productName": "CastFlow",
+    "copyright": "Copyright © 2026 Elfred",
+    "directories": {
+      "output": "../../dist/release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/main/**/*",
+      "src/preload/**/*",
+      "dist/**/*",
+      "package.json",
+      "!**/*.map",
+      "!test/**/*"
+    ],
+    "extraMetadata": {
+      "main": "src/main/index.js"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Network;FileTransfer",
+      "synopsis": "Transfert de fichiers local",
+      "maintainer": "Elfred <elfred@castflow.app>"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "CastFlow"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.utilities"
+    },
+    "publish": null,
+    "electronVersion": "32.3.3",
+    "executableName": "castflow"
   }
 }

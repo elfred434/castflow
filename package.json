@@ -17,8 +17,14 @@
     "check:mobile": "node scripts/check-mobile-config.js",
     "test:core": "node apps/desktop/test/core.test.js",
     "test:e2e": "node apps/desktop/test/e2e.test.js",
-    "test": "npm run check:syntax && npm run check:protocol && npm run check:mobile && npm run test:core && npm run test:e2e",
-    "ci": "npm run test && npm run build:shared && npm run build:desktop"
+    "test": "npm run check:syntax && npm run check:protocol && npm run check:mobile && npm run check:packaging && npm run test:core && npm run test:e2e && npm run test:hash && npm run test:receive",
+    "ci": "npm run test && npm run build:shared && npm run build:desktop",
+    "test:hash": "node apps/desktop/test/hash.test.js",
+    "test:receive": "node apps/desktop/test/receive.test.js",
+    "check:packaging": "node scripts/check-packaging.js",
+    "pack:linux": "npm run pack:linux -w @castflow/desktop",
+    "pack:win": "npm run pack:win -w @castflow/desktop",
+    "pack:mac": "npm run pack:mac -w @castflow/desktop"
   },
   "devDependencies": {
     "@babel/parser": "7.26.2",

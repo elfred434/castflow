@@ -15,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   CastFlowClient, parseConnectUrl, parseWifiPayload,
   formatBytes, formatSpeed, formatEta, guessMime, category, uid, DEFAULT_PORTS,
+  hashBase64, hashMatches,
 } from './src/client';
 import { T, catColor, catEmoji } from './src/theme';
 
@@ -42,6 +43,8 @@ function Main() {
   const [progress, setProgress] = useState(null);
   const [history, setHistory] = useState([]);
   const [manualIp, setManualIp] = useState('');
+  const [offer, setOffer] = useState(null);          // offre reçue du PC
+  const [downloading, setDownloading] = useState(null);
   const [netInfo, setNetInfo] = useState(null);
   const clientRef = useRef(null);
 
@@ -86,9 +89,10 @@ function Main() {
     setConnecting(true);
     setPeer(target);
     try {
-      const client = new CastFlowClient(device, { uploadFile: uploadWithExpo });
+      const client = new CastFlowClient(device, { uploadFile: uploadWithExpo, downloadFile: downloadWithExpo });
       clientRef.current = client;
       client.on('disconnected', () => setConnected(false));
+      client.on('OFFER', (data) => setOffer(data)); // le PC propose des fichiers
       const ack = await client.connect(target);
 
       if (ack.requiresPin) {
@@ -212,9 +216,48 @@ function Main() {
     }
   };
 
+  /* --------- réception : télécharger l'offre du PC --------- */
+
+  const acceptOffer = async () => {
+    const client = clientRef.current;
+    if (!client || !offer) return;
+    const files = offer.files;
+    setDownloading({ totalReceived: 0, totalSize: offer.totalSize, bps: 0 });
+    try {
+      // On relit l'offre côté serveur pour récupérer les empreintes,
+      // calculées en arrière-plan juste après la publication.
+      let detailed = files;
+      try {
+        const fresh = await client.listOffer(offer.transferId);
+        if (fresh?.files?.length) detailed = fresh.files;
+      } catch { /* on garde la liste du message OFFER */ }
+
+      const saved = await client.receiveFiles(offer.transferId, detailed, {
+        onProgress: setDownloading,
+      });
+
+      await saveHistory({
+        id: uid('h'), at: Date.now(), peer: peer?.name,
+        count: detailed.length, size: offer.totalSize,
+        names: detailed.map((f) => f.name), state: 'completed', direction: 'receive',
+      });
+      Alert.alert(
+        'Réception terminée',
+        `${saved.length} fichier(s) enregistré(s) dans le dossier CastFlow de l'application.`,
+      );
+      setOffer(null);
+    } catch (e) {
+      Alert.alert('Échec de la réception', e.message);
+    } finally {
+      setDownloading(null);
+    }
+  };
+
   const disconnect = () => {
     clientRef.current?.disconnect();
     clientRef.current = null;
+    setOffer(null);
+    setDownloading(null);
     setConnected(false);
     setPeer(null);
     setScreen('home');
@@ -262,7 +305,17 @@ function Main() {
           />
         )}
 
-        {history.length > 0 && !progress && <HistoryList history={history} />}
+        {connected && (offer || downloading) && (
+          <IncomingOffer
+            offer={offer}
+            downloading={downloading}
+            peerName={peer?.name}
+            onAccept={acceptOffer}
+            onReject={() => setOffer(null)}
+          />
+        )}
+
+        {history.length > 0 && !progress && !downloading && <HistoryList history={history} />}
       </ScrollView>
 
       <PinModal
@@ -281,6 +334,51 @@ function Main() {
 /* ================================================================== */
 /* Upload natif avec progression (expo-file-system)                    */
 /* ================================================================== */
+
+/**
+ * Téléchargement natif d'un fichier offert par le PC, avec progression,
+ * enregistrement dans le stockage de l'app et vérification d'intégrité.
+ */
+async function downloadWithExpo({ url, file, token, targetDir, onProgress }) {
+  const dir = targetDir || `${FileSystem.documentDirectory}CastFlow/`;
+  await FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {});
+
+  // Évite d'écraser un fichier déjà reçu : photo.jpg → photo (1).jpg
+  let dest = `${dir}${file.name}`;
+  const dot = file.name.lastIndexOf('.');
+  const base = dot > 0 ? file.name.slice(0, dot) : file.name;
+  const ext = dot > 0 ? file.name.slice(dot) : '';
+  let n = 1;
+  while ((await FileSystem.getInfoAsync(dest)).exists) {
+    dest = `${dir}${base} (${n++})${ext}`;
+  }
+
+  const task = FileSystem.createDownloadResumable(
+    url,
+    dest,
+    { headers: { 'X-CastFlow-Token': token } },
+    (p) => onProgress?.(p.totalBytesWritten),
+  );
+
+  const result = await task.downloadAsync();
+  if (!result || result.status >= 400) {
+    throw new Error(`Téléchargement échoué (${result?.status ?? 'réseau'})`);
+  }
+
+  // Vérification d'intégrité si le PC a fourni une empreinte.
+  if (file.hash) {
+    const b64 = await FileSystem.readAsStringAsync(dest, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    if (!hashMatches(file.hash, hashBase64(b64))) {
+      await FileSystem.deleteAsync(dest, { idempotent: true });
+      throw new Error(`Intégrité invalide pour ${file.name}`);
+    }
+  }
+
+  onProgress?.(file.size);
+  return { uri: dest, name: file.name, size: file.size };
+}
 
 async function uploadWithExpo({ url, uri, token, offset, onProgress, size }) {
   const task = FileSystem.createUploadTask(
@@ -456,6 +554,64 @@ function SendView({ peer, files, setFiles, progress, onPickDocs, onPickMedia, on
         </>
       )}
     </>
+  );
+}
+
+function IncomingOffer({ offer, downloading, peerName, onAccept, onReject }) {
+  if (downloading) {
+    const pct = downloading.totalSize
+      ? (downloading.totalReceived / downloading.totalSize) * 100 : 0;
+    return (
+      <Card title="Réception en cours">
+        <Text style={{ color: T.text, fontSize: 15, fontWeight: '700', marginBottom: 12 }}>
+          Depuis {peerName}
+        </Text>
+        <Bar value={pct} />
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 9 }}>
+          <Text style={s.dimSmall}>
+            {formatBytes(downloading.totalReceived)} / {formatBytes(downloading.totalSize)} · {Math.round(pct)} %
+          </Text>
+          <Text style={s.dimSmall}>
+            {formatSpeed(downloading.bps)} · {formatEta(downloading.totalSize - downloading.totalReceived, downloading.bps)}
+          </Text>
+        </View>
+      </Card>
+    );
+  }
+
+  if (!offer) return null;
+
+  return (
+    <Card title="Fichiers proposés">
+      <Text style={{ color: T.text, fontSize: 15, fontWeight: '700', marginBottom: 4 }}>
+        {peerName} veut vous envoyer {offer.files.length} fichier(s)
+      </Text>
+      <Text style={[s.dimSmall, { marginBottom: 12 }]}>Total : {formatBytes(offer.totalSize)}</Text>
+
+      {offer.files.slice(0, 6).map((f) => (
+        <View key={f.id} style={s.fileRow}>
+          <View style={[s.fileIcon, { backgroundColor: `${catColor[category(f.mime, f.name)]}22` }]}>
+            <Text style={{ fontSize: 17 }}>{catEmoji[category(f.mime, f.name)]}</Text>
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text numberOfLines={1} style={s.fileName}>{f.name}</Text>
+            <Text style={s.dimSmall}>{formatBytes(f.size)}</Text>
+          </View>
+        </View>
+      ))}
+      {offer.files.length > 6 && (
+        <Text style={[s.dimSmall, { marginTop: 6 }]}>et {offer.files.length - 6} autre(s)…</Text>
+      )}
+
+      <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+        <TouchableOpacity style={[s.ghostBtn, { flex: 1 }]} onPress={onReject}>
+          <Text style={{ color: T.dim, fontWeight: '600' }}>Ignorer</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[s.primaryBtn, { flex: 1 }]} onPress={onAccept}>
+          <Text style={s.primaryBtnText}>Recevoir</Text>
+        </TouchableOpacity>
+      </View>
+    </Card>
   );
 }
 

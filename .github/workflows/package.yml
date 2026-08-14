@@ -1,0 +1,92 @@
+# ==========================================================================
+# CastFlow — Packaging des applications de bureau
+#
+# Produit les installateurs pour Linux, Windows et macOS. Déclenché
+# manuellement, ou automatiquement sur un tag de version.
+#
+# Les artefacts sortent dans dist/release/ (et non release/) : ce chemin est
+# déjà ignoré par git et par les outils, ce qui évite d'embarquer ~100 Mo de
+# binaires Electron dans le dépôt ou les sauvegardes.
+# ==========================================================================
+
+name: Package
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: Plateformes à construire
+        required: false
+        default: all
+        type: choice
+        options: [all, linux, windows, macos]
+
+permissions:
+  contents: read
+
+env:
+  npm_config_fund: "false"
+  npm_config_audit: "false"
+
+jobs:
+  package:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux (AppImage + deb)
+            script: pack:linux
+            artifact: castflow-linux
+            pattern: |
+              dist/release/*.AppImage
+              dist/release/*.deb
+          - os: windows-latest
+            label: Windows (installateur + portable)
+            script: pack:win
+            artifact: castflow-windows
+            pattern: |
+              dist/release/*.exe
+          - os: macos-latest
+            label: macOS (dmg + zip)
+            script: pack:mac
+            artifact: castflow-macos
+            pattern: |
+              dist/release/*.dmg
+              dist/release/*.zip
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      # Ici on a besoin du binaire Electron, contrairement aux jobs de test
+      # qui posent ELECTRON_SKIP_BINARY_DOWNLOAD pour gagner ~100 Mo.
+      - name: Installation des dépendances
+        run: npm ci --no-audit --no-fund
+
+      - name: Construction de l'installateur
+        run: npm run ${{ matrix.script }}
+        env:
+          # Pas de signature de code : évite qu'electron-builder cherche
+          # des certificats absents et échoue.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Inventaire des fichiers produits
+        shell: bash
+        run: ls -lh dist/release/
+
+      - name: Publication
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.pattern }}
+          retention-days: 14
+          if-no-files-found: error

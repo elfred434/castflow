@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { WebSocketServer } = require('ws');
+const { hashFile, hashMatches } = require('./hash');
 
 const {
   PROTOCOL_VERSION, DEFAULT_PORTS, LIMITS,
@@ -199,6 +200,22 @@ class CastFlowServer extends EventEmitter {
     }
 
     // GET /download/:transferId/:fileId
+    // GET /offer/:transferId — liste des fichiers proposés au pair
+    if (req.method === 'GET' && seg[0] === 'offer' && seg.length === 2) {
+      const t = this.transfers.get(seg[1]);
+      if (!t || t.direction !== 'send') {
+        return this._err(res, 404, 'UNKNOWN_FILE', 'Offre inconnue');
+      }
+      return this._json(res, 200, {
+        transferId: t.id,
+        totalSize: t.totalSize,
+        files: [...t.files.values()].map((f) => ({
+          id: f.id, name: f.name, size: f.size, mime: f.mime,
+          hash: f.hash, token: f.token,
+        })),
+      });
+    }
+
     if (req.method === 'GET' && seg[0] === 'download' && seg.length === 3) {
       return this._sendFile(req, res, seg[1], seg[2]);
     }
@@ -266,10 +283,36 @@ class CastFlowServer extends EventEmitter {
         // Coupure : on garde le .cfpart pour permettre la reprise.
         return this._err(res, 500, 'INTERNAL', 'Transfert incomplet, reprise possible');
       }
+      // Vérification d'intégrité avant de publier le fichier.
+      let hashOk = true;
+      let actualHash;
+      try {
+        actualHash = await hashFile(tmp);
+        hashOk = hashMatches(entry.expectedHash, actualHash);
+      } catch {
+        hashOk = !entry.expectedHash; // hash illisible : on n'échoue que s'il était attendu
+      }
+
+      if (!hashOk) {
+        // Fichier corrompu en transit : on ne le livre pas.
+        try { await fsp.unlink(tmp); } catch { /* déjà absent */ }
+        entry.received = 0;
+        entry.done = false;
+        entry.hashOk = false;
+        this._broadcast(envelope('FILE_DONE', {
+          transferId: t.id, fileId: entry.id, hashOk: false,
+        }));
+        this.emit('transfer', this._publicTransfer(t));
+        return this._err(res, 422, 'HASH_MISMATCH',
+          `Intégrité invalide pour ${entry.name} (attendu ${entry.expectedHash}, obtenu ${actualHash})`);
+      }
+
       try {
         const final = await uniquePath(this.downloadDir, entry.name);
         await fsp.rename(tmp, final);
         entry.finalPath = final;
+        entry.hash = actualHash;
+        entry.hashOk = true;
         entry.done = true;
       } catch (e) {
         return fail('INTERNAL', e.message);
@@ -479,6 +522,8 @@ class CastFlowServer extends EventEmitter {
           received: 0,
           bps: 0,
           done: false,
+          expectedHash: f.hash || null,
+          hashOk: null,
           token: crypto.randomBytes(16).toString('hex'),
           tmpPath: path.join(this.downloadDir, `.${f.id}-${name}.cfpart`),
         }];
@@ -547,6 +592,20 @@ class CastFlowServer extends EventEmitter {
     };
     this.transfers.set(t.id, t);
     this.emit('transfer', this._publicTransfer(t));
+
+    // Empreintes calculées en arrière-plan : le pair peut déjà télécharger,
+    // et la vérification d'intégrité devient possible dès qu'elles arrivent.
+    this._hashOffer(t);
+
+    // Prévient les mobiles connectés qu'une offre les attend.
+    this._broadcast(envelope('OFFER', {
+      transferId: t.id,
+      totalSize: t.totalSize,
+      files: [...t.files.values()].map((f) => ({
+        id: f.id, name: f.name, size: f.size, mime: f.mime, token: f.token,
+      })),
+    }));
+
     return {
       transferId: t.id,
       files: [...t.files.values()].map((f) => ({
@@ -556,10 +615,22 @@ class CastFlowServer extends EventEmitter {
     };
   }
 
+  /** Calcule les empreintes des fichiers offerts, sans bloquer l'offre. */
+  async _hashOffer(t) {
+    for (const f of t.files.values()) {
+      if (!f.sourcePath || f.hash) continue;
+      try {
+        f.hash = await hashFile(f.sourcePath);
+      } catch { /* fichier illisible : on laissera passer sans vérification */ }
+    }
+    this.emit('transfer', this._publicTransfer(t));
+  }
+
   _publicFile(f) {
     return {
       id: f.id, name: f.name, size: f.size, mime: f.mime,
       received: f.received, bps: f.bps, done: f.done, path: f.finalPath,
+      hash: f.hash, hashOk: f.hashOk,
     };
   }
 

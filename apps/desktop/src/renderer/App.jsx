@@ -600,8 +600,15 @@ function TransferCard({ t, onCancel, onAccept, onReject }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
                   <span style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-                  <span style={{ fontSize: 11.5, color: f.done ? T.green : T.dim, flexShrink: 0 }}>
-                    {f.done ? '✓ terminé' : `${formatBytes(f.received)} / ${formatBytes(f.size)}`}
+                  <span style={{
+                    fontSize: 11.5, flexShrink: 0,
+                    color: f.hashOk === false ? T.red : f.done ? T.green : T.dim,
+                  }}>
+                    {f.hashOk === false
+                      ? '✕ intégrité invalide'
+                      : f.done
+                        ? '✓ vérifié'
+                        : `${formatBytes(f.received)} / ${formatBytes(f.size)}`}
                   </span>
                 </div>
                 <Progress value={fp} height={3} color={f.done ? T.green : catColor[category(f.mime, f.name)]} />

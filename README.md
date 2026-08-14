@@ -44,7 +44,7 @@ et l'adresse passera en `192.168.43.x`.
 ## Tests
 
 ```bash
-npm test          # tout : syntaxe + protocole + config mobile + 22 tests
+npm test          # tout : vérifications + 37 tests
 npm run ci        # identique au workflow CI (tests + builds)
 ```
 
@@ -54,13 +54,17 @@ Ou individuellement :
 npm run check:syntax     # syntaxe de tout le JS/JSX, desktop et mobile
 npm run check:protocol   # cohérence du protocole entre les 3 paquets
 npm run check:mobile     # permissions et config Expo
+npm run check:packaging  # config electron-builder, icônes, cibles
 npm run test:core        # 13 tests — serveur, sécurité, reprise, découverte UDP
 npm run test:e2e         #  9 tests — le vrai client mobile ↔ le vrai serveur desktop
+npm run test:hash        #  9 tests — intégrité, corruption détectée, parité desktop/mobile
+npm run test:receive     #  6 tests — sens desktop → mobile
 ```
 
 Couverture : handshake, PIN/HMAC, transfert multi-fichiers, reprise après coupure,
 téléchargement avec `Range`, refus/acceptation, traversée de chemin, collision de noms,
-découverte UDP entre deux instances, équivalence HMAC JS ↔ natif.
+découverte UDP entre deux instances, équivalence HMAC JS ↔ natif, empreintes FNV-1a
+conformes aux vecteurs officiels, détection de corruption, réception mobile.
 
 ## Intégration continue
 
@@ -73,8 +77,8 @@ et sur chaque pull request vers `main`, `master` ou `develop`.
 | `verify` | `check:protocol` | Bloque toute divergence de ports, version ou messages entre desktop et mobile |
 | `verify` | `check:mobile` | Valide permissions Android/iOS et configuration Expo |
 | `verify` | `build:shared` | Compile le paquet TypeScript partagé |
-| `test` | `test:core` | 13 tests d'intégration du serveur — sur Node 20 **et** 22 |
-| `test` | `test:e2e` | 9 tests bout-en-bout mobile ↔ desktop — sur Node 20 **et** 22 |
+| `test` | `test:core` | 13 tests d'intégration du serveur — sur Node 22 **et** 24 |
+| `test` | `test:e2e` | 9 tests bout-en-bout mobile ↔ desktop — sur Node 22 **et** 24 |
 | `build` | `build:desktop` | Build Vite, publié en artefact téléchargeable (7 jours) |
 
 Le job `build` attend que `verify` et `test` réussissent (`needs`), et un nouveau push
@@ -86,6 +90,24 @@ transferts silencieusement cassés.
 
 Le test de découverte UDP se met automatiquement en pause si le runner interdit le broadcast,
 pour éviter les échecs intermittents.
+
+### Packaging des applications
+
+```bash
+npm run pack:linux   # AppImage + .deb
+npm run pack:win     # installateur NSIS + portable
+npm run pack:mac     # .dmg + .zip (x64 et Apple Silicon)
+```
+
+Les fichiers atterrissent dans `dist/release/` (dossier ignoré par git). Le workflow `.github/workflows/package.yml`
+construit les trois plateformes en parallèle sur un tag, ou à la demande.
+
+Pour l'APK Android :
+
+```bash
+cd apps/mobile
+npx eas build -p android --profile preview   # APK installable
+```
 
 ### Publier une version
 
@@ -146,10 +168,13 @@ castflow/
 - [x] Reprise de transfert à l'octet près
 - [x] UI desktop complète (appareils, envoi, réception, historique, réglages)
 - [x] Client réseau mobile + UI React Native (scanner QR, PIN, sélection, progression)
-- [x] Tests d'intégration et bout-en-bout (22 au total)
+- [x] Réception côté mobile (desktop → mobile) avec offres et téléchargement
+- [x] Vérification d'intégrité FNV-1a 64 bits, identique desktop et mobile
+- [x] Packaging desktop : AppImage, deb, exe, dmg — icônes incluses
+- [x] Configuration EAS pour l'APK Android
+- [x] Tests d'intégration et bout-en-bout (37 au total)
 - [ ] Wi-Fi Direct natif (Android `WifiP2pManager`)
 - [ ] WebRTC DataChannel (signalisation déjà en place)
 - [ ] TLS auto-signé avec épinglage d'empreinte
-- [ ] Packaging : `.exe` / `.dmg` / `.AppImage` / `.apk`
 
 Voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) pour la roadmap détaillée.

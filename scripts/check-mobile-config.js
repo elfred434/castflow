@@ -50,6 +50,28 @@ check('dépendances critiques du transfert présentes', () => {
   assert.equal(missing.length, 0, `dépendances manquantes : ${missing.join(', ')}`);
 });
 
+check('icônes et écran de démarrage présents', () => {
+  const fs = require('node:fs');
+  for (const rel of ['assets/icon.png', 'assets/adaptive-icon.png', 'assets/splash.png']) {
+    assert.ok(fs.existsSync(path.join(ROOT, 'apps/mobile', rel)), `${rel} manquant`);
+  }
+  assert.ok(app.icon, 'expo.icon non déclaré');
+  assert.ok(app.android?.adaptiveIcon?.foregroundImage, 'icône adaptative Android manquante');
+});
+
+check('versions de publication définies', () => {
+  assert.ok(Number.isInteger(app.android?.versionCode), 'android.versionCode requis pour publier');
+  assert.ok(app.ios?.buildNumber, 'ios.buildNumber requis pour publier');
+});
+
+check('profils de build EAS disponibles', () => {
+  const eas = require(path.join(ROOT, 'apps/mobile/eas.json'));
+  for (const profile of ['development', 'preview', 'production']) {
+    assert.ok(eas.build?.[profile], `profil EAS « ${profile} » manquant`);
+  }
+  assert.equal(eas.build.preview.android.buildType, 'apk', 'le profil preview doit produire un APK');
+});
+
 check('point d\'entrée cohérent', () => {
   assert.equal(pkg.main, 'index.js', 'le point d\'entrée doit être index.js');
 });

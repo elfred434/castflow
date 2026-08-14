@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "CastFlow",
+    "slug": "castflow",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "castflow",
+    "splash": { "backgroundColor": "#0b1120", "resizeMode": "contain" },
+    "android": {
+      "package": "com.elfred.castflow",
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "ACCESS_WIFI_STATE",
+        "CHANGE_WIFI_STATE",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ],
+      "usesCleartextTraffic": true
+    },
+    "ios": {
+      "bundleIdentifier": "com.elfred.castflow",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "CastFlow a besoin du réseau local pour transférer vos fichiers.",
+        "NSCameraUsageDescription": "Pour scanner le QR code de connexion.",
+        "NSBonjourServices": ["_castflow._tcp"],
+        "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true }
+      }
+    },
+    "plugins": [
+      ["expo-camera", { "cameraPermission": "CastFlow utilise la caméra pour scanner le QR code." }],
+      ["expo-media-library", { "savePhotosPermission": "Enregistrer les fichiers reçus." }]
+    ]
+  }
+}

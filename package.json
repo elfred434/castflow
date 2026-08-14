@@ -1,0 +1,12 @@
+{
+  "name": "castflow",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Transfert de fichiers local entre desktop et mobile",
+  "workspaces": ["packages/*", "apps/desktop"],
+  "scripts": {
+    "dev:desktop": "npm run dev -w @castflow/desktop",
+    "dev:mobile": "cd apps/mobile && npx expo start",
+    "build:shared": "npm run build -w @castflow/shared"
+  }
+}

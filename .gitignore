@@ -1,0 +1,9 @@
+node_modules/
+dist/
+out/
+build/
+.expo/
+*.log
+.DS_Store
+.env
+apps/desktop/release/

@@ -24,14 +24,14 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 
 ## 3. Registre des problèmes, bugs et limitations
 
-### CF-001 — Flutter et Dart indisponibles dans les environnements de travail
+### CF-001 — Flutter indisponible dans les environnements de travail
 
-- Statut : ouvert.
-- Gravité : bloquant pour la validation locale.
-- Vérification : les commandes `flutter` et `dart` ne sont présentes ni dans le `PATH` du terminal Windows contrôlé ni dans le sandbox au 22 septembre 2026.
-- Impact : impossibilité d'exécuter localement `flutter analyze`, `flutter test` et les builds.
-- Contournement actuel : écrire des tests et les faire exécuter par la CI GitHub.
-- Condition de fermeture : installation vérifiée du SDK attendu ou exécution réussie de la CI.
+- Statut : partiellement contourné.
+- Gravité : bloquant pour l'analyse Flutter et les builds locaux.
+- Vérification initiale : les commandes `flutter` et `dart` n'étaient présentes ni dans le `PATH` du terminal Windows contrôlé ni dans le sandbox au 22 septembre 2026.
+- Action vérifiée : le SDK Dart autonome 3.13.0 a été téléchargé dans le cache non versionné du sandbox ; `dart format` peut maintenant y être exécuté.
+- Limite restante : Flutter reste absent du terminal Windows et du sandbox ; `flutter analyze`, `flutter test` et les builds restent confiés à la CI.
+- Condition de fermeture : installation vérifiée de Flutter ou environnement local équivalent à la CI.
 
 ### CF-002 — Dépendances JavaScript suivies par Git
 
@@ -112,11 +112,20 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 
 ### CF-011 — La CI ne se déclenchait pas sur la branche de développement
 
-- Statut : corrigé, validation distante en attente.
+- Statut : résolu.
 - Gravité : haute dans un environnement sans SDK Flutter local.
-- Vérification : l'API GitHub Actions a retourné zéro exécution pour `feature/remote-control-lan` après publication ; `.github/workflows/ci.yml` limitait les push à `main`, `master` et `develop`.
+- Vérification initiale : l'API GitHub Actions a retourné zéro exécution pour `feature/remote-control-lan` après publication ; `.github/workflows/ci.yml` limitait les push à `main`, `master` et `develop`.
 - Correction : déclencher le workflow CI sur toutes les branches poussées tout en conservant les branches cibles des pull requests.
-- Condition de fermeture : observer une exécution GitHub Actions et consigner son résultat.
+- Validation : l'exécution GitHub Actions `35793492768` a bien été déclenchée sur la branche.
+
+### CF-012 — Échec CI au contrôle de formatage
+
+- Statut : corrigé localement, nouvelle CI en attente.
+- Gravité : moyenne.
+- Vérification : l'exécution `35793492768` a installé Flutter et les dépendances, puis a échoué à l'étape `dart format`; analyse et tests ont été ignorés.
+- Diagnostic vérifié : Dart 3.13.0 a identifié uniquement `lib/remote/control_protocol.dart` comme non formaté.
+- Correction : fichier réécrit par `dart format`; un second contrôle retourne zéro fichier à modifier.
+- Condition de fermeture : nouvelle CI complète réussie.
 
 ## 4. Décisions d'architecture
 
@@ -151,6 +160,8 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-22 | Exécution des nouveaux tests Flutter | Impossible, CF-001 |
 | 2026-09-22 | Dépendance cryptographique existante | `crypto 3.0.7` vérifiée dans `pubspec.lock` |
 | 2026-09-22 | Stockage sécurisé existant | Aucun coffre natif trouvé ; CF-010 ouvert |
+| 2026-09-22 | CI `35793492768` | Échec au formatage ; analyse et tests ignorés |
+| 2026-09-22 | Formatage avec Dart 3.13.0 | 21 fichiers contrôlés, `control_protocol.dart` corrigé, puis 0 changement restant |
 
 ## 6. Travail réalisé pour le contrôle distant
 

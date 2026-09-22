@@ -130,7 +130,8 @@ class ControlRequest {
 
   factory ControlRequest.fromJson(Map<String, Object?> json) {
     final id = json['sessionId']?.toString() ?? '';
-    if (!_validId(id)) throw const FormatException('Session de contrôle invalide');
+    if (!_validId(id))
+      throw const FormatException('Session de contrôle invalide');
     final capabilities = ControlCapabilities.fromJson({
       'values': json['requested'],
       'maxWidth': json['width'],
@@ -188,11 +189,15 @@ class RemoteInputEvent {
 
   factory RemoteInputEvent.decode(Object? raw) {
     final decoded = raw is String ? jsonDecode(raw) : raw;
-    if (decoded is! Map) throw const FormatException('Événement distant invalide');
+    if (decoded is! Map)
+      throw const FormatException('Événement distant invalide');
     final json = decoded.cast<String, Object?>();
     final kindName = json['kind']?.toString();
-    final kind = RemoteInputKind.values.where((value) => value.name == kindName).firstOrNull;
-    if (kind == null) throw const FormatException('Type d’entrée distant invalide');
+    final kind = RemoteInputKind.values
+        .where((value) => value.name == kindName)
+        .firstOrNull;
+    if (kind == null)
+      throw const FormatException('Type d’entrée distant invalide');
     final sequence = (json['sequence'] as num?)?.toInt() ?? -1;
     if (sequence < 0) throw const FormatException('Séquence distante invalide');
     final event = RemoteInputEvent(

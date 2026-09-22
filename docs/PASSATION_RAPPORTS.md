@@ -102,13 +102,14 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Vérification : `README.md` et les fichiers `docs/*.md` du clone sandbox sont identifiés comme textes UTF-8.
 - Conclusion vérifiée : l'altération observée concerne le chemin d'affichage PowerShell/pont ; aucune corruption des fichiers contrôlés n'a été démontrée.
 
-### CF-010 — Coffre sécurisé pour les secrets de confiance non implémenté
+### CF-010 — Coffre sécurisé pour les secrets de confiance
 
-- Statut : ouvert.
-- Gravité : critique avant persistance d'un appareil approuvé.
-- Vérification : `SettingsRepository` utilise actuellement `SharedPreferences` et aucun coffre natif n'est déclaré dans `pubspec.yaml`.
-- Impact : le secret d'appairage ne doit pas être persisté tant qu'un stockage protégé Windows/Android n'est pas intégré et vérifié.
-- Mesure actuelle : le protocole de preuve manipule le secret uniquement en mémoire et documente explicitement l'interdiction de SharedPreferences.
+- Statut : implémenté, validation native sur appareils à effectuer.
+- Gravité initiale : critique avant persistance d'un appareil approuvé.
+- Vérification initiale : `SettingsRepository` utilisait `SharedPreferences` et aucun coffre natif n'était déclaré.
+- Correction : ajout de `flutter_secure_storage 11.2.0`, d'une abstraction testable et de `TrustedPeerStore`; les secrets ne passent pas par `SharedPreferences`.
+- Validation locale : résolution des dépendances, génération du plugin Windows, analyse sans erreur et sept tests de stockage réussis.
+- Limite restante : voir CF-015 pour la validation physique des coffres Android et Windows.
 
 ### CF-011 — La CI ne se déclenchait pas sur la branche de développement
 
@@ -141,6 +142,14 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Gravité : information.
 - Vérification : `flutter pub get` avec Flutter 3.47.0 signale 34 paquets ayant une version plus récente incompatible avec les contraintes actuelles.
 - Décision : ne pas mettre à jour en bloc sans audit de compatibilité ; ce constat n'empêche pas la validation de la version verrouillée actuelle.
+
+### CF-015 — Coffres natifs non testés sur appareils physiques
+
+- Statut : à vérifier.
+- Gravité : haute avant distribution.
+- Vérification acquise : la version officielle `flutter_secure_storage 11.2.0` annonce Android et Windows, exige Dart ≥ 3.8 et Flutter ≥ 3.19; le projet respecte ces versions et Android minSdk 23.
+- Vérification manquante : aucune écriture/lecture réelle n'a encore été exécutée dans Android Keystore ni Windows Credential Manager sur les appareils cibles.
+- Mesure : l'interface est testée avec un coffre mémoire; ne pas déclarer la persistance native validée avant essais physiques.
 
 ## 4. Décisions d'architecture
 
@@ -177,6 +186,11 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-22 | Stockage sécurisé existant | Aucun coffre natif trouvé ; CF-010 ouvert |
 | 2026-09-22 | CI `35793492768` | Échec au formatage ; analyse et tests ignorés |
 | 2026-09-22 | Formatage avec Dart 3.13.0 | 21 fichiers contrôlés, `control_protocol.dart` corrigé, puis 0 changement restant |
+| 2026-09-22 | SDK Flutter sandbox | Archive officielle Flutter 3.47.0, SHA-256 vérifié |
+| 2026-09-22 | Analyse Flutter après corrections | 0 problème |
+| 2026-09-22 | Tests avant coffre sécurisé | 37/37 réussis |
+| 2026-09-22 | Tests après coffre sécurisé | 44/44 réussis |
+| 2026-09-22 | Formatage après coffre sécurisé | 23 fichiers, 0 changement restant |
 
 ## 6. Travail réalisé pour le contrôle distant
 

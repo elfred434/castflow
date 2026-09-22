@@ -16,6 +16,19 @@ final Random _trustRandom = Random.secure();
 /// ne doit jamais être écrit dans SharedPreferences ou dans les journaux.
 String generateTrustSecret() => _randomBase64Url(_minimumSecretBytes);
 
+bool isValidTrustSecret(String secret) {
+  try {
+    _decodeBase64Url(
+      secret,
+      minimumBytes: _minimumSecretBytes,
+      label: 'secret de confiance',
+    );
+    return true;
+  } on FormatException {
+    return false;
+  }
+}
+
 class TrustChallenge {
   const TrustChallenge({
     required this.id,

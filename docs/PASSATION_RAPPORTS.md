@@ -191,6 +191,7 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-22 | Tests avant coffre sécurisé | 37/37 réussis |
 | 2026-09-22 | Tests après coffre sécurisé | 44/44 réussis |
 | 2026-09-22 | Formatage après coffre sécurisé | 23 fichiers, 0 changement restant |
+| 2026-09-22 | Négociation des capacités client/serveur | Analyse 0 problème, tests 45/45 réussis |
 
 ## 6. Travail réalisé pour le contrôle distant
 
@@ -213,13 +214,22 @@ Travail en cours dans le lot suivant :
 - consommation unique du challenge, y compris après une tentative invalide ;
 - tests de validité, expiration, rejeu et substitution d'identité.
 
+Ajouts suivants validés :
+
+- coffre sécurisé Android/Windows derrière une interface testable ;
+- création, lecture, classement, mise à jour et révocation des appareils approuvés ;
+- négociation bidirectionnelle des capacités de contrôle pendant le handshake ;
+- rafraîchissement authentifié des capacités distantes ;
+- aucun contrôle natif annoncé par défaut tant qu'aucun adaptateur n'est actif.
+
 ## 7. Prochaines étapes vérifiables
 
-1. Ajouter et tester la preuve cryptographique de reconnexion d'un appareil approuvé.
-2. Définir une interface de stockage sécurisé sans placer de secret dans SharedPreferences.
-3. Intégrer la négociation des capacités au client et au serveur existants.
-4. Faire exécuter la suite Flutter par CI.
-5. Ne commencer les adaptateurs natifs qu'après validation du transport de confiance.
+1. Relier le challenge de confiance et le coffre au handshake client/serveur.
+2. Ajouter révocation et rotation depuis l'interface utilisateur.
+3. Sécuriser le transport local et vérifier l'épinglage avant toute injection distante.
+4. Implémenter la machine d'état demande/acceptation/arrêt d'une session de contrôle.
+5. Commencer l'adaptateur Windows uniquement après validation des étapes précédentes.
+6. Tester le coffre sur appareils Windows et Android physiques.
 
 ## 8. Modèle pour les prochaines entrées
 

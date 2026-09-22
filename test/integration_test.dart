@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:castflow/core/models.dart';
 import 'package:castflow/network/castflow_client.dart';
 import 'package:castflow/network/castflow_server.dart';
+import 'package:castflow/remote/control_protocol.dart';
 import 'package:castflow/security/security.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -40,6 +41,9 @@ RemoteDevice remoteFor(CastFlowServer server, {bool requiresPin = false}) =>
 Future<(CastFlowServer, Directory)> startServer({
   String? pin,
   bool autoAccept = true,
+  ControlCapabilities controlCapabilities = const ControlCapabilities(
+    values: {},
+  ),
 }) async {
   final directory = await Directory.systemTemp.createTemp('castflow-server-');
   final server = CastFlowServer(
@@ -47,6 +51,7 @@ Future<(CastFlowServer, Directory)> startServer({
     downloadDirectory: directory.path,
     pin: pin,
     autoAccept: autoAccept,
+    controlCapabilities: controlCapabilities,
   );
   await server.start(preferredHttpPort: 0, preferredWsPort: 0);
   return (server, directory);
@@ -82,6 +87,53 @@ void main() {
     expect(await client.connect(remoteFor(server)), isTrue);
     expect(client.authenticated, isTrue);
     expect(client.sessionToken, startsWith('session_'));
+  });
+
+  test('négocie les capacités de contrôle dans les deux sens', () async {
+    const serverCapabilities = ControlCapabilities(
+      values: {
+        ControlCapability.screenCapture,
+        ControlCapability.pointer,
+        ControlCapability.keyboard,
+      },
+      maxWidth: 1920,
+      maxHeight: 1080,
+      maxFps: 30,
+    );
+    const clientCapabilities = ControlCapabilities(
+      values: {
+        ControlCapability.screenCapture,
+        ControlCapability.pointer,
+        ControlCapability.systemNavigation,
+      },
+      maxWidth: 1280,
+      maxHeight: 720,
+      maxFps: 15,
+    );
+    final (server, directory) = await startServer(
+      controlCapabilities: serverCapabilities,
+    );
+    final client = CastFlowClient(
+      mobile,
+      controlCapabilities: clientCapabilities,
+    );
+    addTearDown(() async {
+      await client.dispose();
+      await server.dispose();
+      await directory.delete(recursive: true);
+    });
+
+    expect(await client.connect(remoteFor(server)), isTrue);
+    expect(client.remoteControlCapabilities.values, serverCapabilities.values);
+    expect(client.remoteControlCapabilities.maxFps, 30);
+    expect(
+      server.controlCapabilitiesFor(mobile.id)?.values,
+      clientCapabilities.values,
+    );
+
+    final refreshed = await client.refreshControlCapabilities();
+    expect(refreshed.maxWidth, 1920);
+    expect(refreshed.supports(ControlCapability.keyboard), isTrue);
   });
 
   test('mauvais PIN refusé puis bon PIN accepté', () async {

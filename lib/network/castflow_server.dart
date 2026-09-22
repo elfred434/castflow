@@ -6,6 +6,7 @@ import 'dart:math';
 import '../core/constants.dart';
 import '../core/models.dart';
 import '../protocol/protocol.dart';
+import '../remote/control_protocol.dart';
 import '../security/file_hash.dart';
 import '../security/security.dart';
 
@@ -15,12 +16,14 @@ class CastFlowServer {
     required this.downloadDirectory,
     this.pin,
     this.autoAccept = false,
+    this.controlCapabilities = const ControlCapabilities(values: {}),
   });
 
   final DeviceInfo device;
   String downloadDirectory;
   String? pin;
   bool autoAccept;
+  final ControlCapabilities controlCapabilities;
 
   HttpServer? _httpServer;
   HttpServer? _wsServer;
@@ -42,6 +45,13 @@ class CastFlowServer {
   Stream<TransferSnapshot> get transfers => _transferController.stream;
   Stream<TransferSnapshot> get incomingTransfers => _incomingController.stream;
   Stream<DeviceInfo> get connectedPeers => _peerController.stream;
+
+  ControlCapabilities? controlCapabilitiesFor(String deviceId) {
+    for (final client in _clients) {
+      if (client.device?.id == deviceId) return client.controlCapabilities;
+    }
+    return null;
+  }
 
   List<TransferSnapshot> get transferHistory {
     final result = _transfers.values.map(_snapshot).toList();
@@ -512,6 +522,12 @@ class CastFlowServer {
         final rawDevice = message.data['device'];
         if (rawDevice is! Map) return;
         client.device = DeviceInfo.fromJson(rawDevice.cast<String, Object?>());
+        final rawCapabilities = message.data['controlCapabilities'];
+        client.controlCapabilities = rawCapabilities is Map
+            ? ControlCapabilities.fromJson(
+                rawCapabilities.cast<String, Object?>(),
+              )
+            : const ControlCapabilities(values: {});
         client.authenticated = pin == null;
         if (client.authenticated) client.sessionToken = secureId('session');
         _sendToClient(
@@ -521,12 +537,31 @@ class CastFlowServer {
             'nonce': client.nonce,
             'requiresPin': pin != null,
             'trusted': false,
+            'controlCapabilities': controlCapabilities.toJson(),
             if (client.authenticated) 'sessionToken': client.sessionToken,
           }),
         );
         if (client.device != null) _peerController.add(client.device!);
       case 'AUTH':
         _authenticate(client, message);
+      case ControlMessageType.capabilities:
+        if (!client.authenticated) {
+          _sendToClient(
+            client,
+            message.reply(ControlMessageType.error, {
+              'code': 'AUTH_REQUIRED',
+              'message': 'Authentification requise',
+            }),
+          );
+          return;
+        }
+        _sendToClient(
+          client,
+          message.reply(
+            ControlMessageType.capabilities,
+            controlCapabilities.toJson(),
+          ),
+        );
       case 'TRANSFER_REQUEST':
         if (!client.authenticated) {
           _sendToClient(
@@ -850,6 +885,9 @@ class _ClientSession {
   final String address;
   final String nonce;
   DeviceInfo? device;
+  ControlCapabilities controlCapabilities = const ControlCapabilities(
+    values: {},
+  );
   bool authenticated = false;
   String sessionToken = '';
 }

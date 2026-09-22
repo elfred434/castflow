@@ -60,11 +60,12 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 
 ### CF-005 — Transport de contrôle actuel non chiffré
 
-- Statut : ouvert.
+- Statut : en cours de correction.
 - Gravité : critique avant activation du contrôle distant.
-- Vérification : le protocole actuel utilise HTTP et WebSocket en clair ; Android déclare `android:usesCleartextTraffic="true"`.
-- Impact : un contrôle distant persistant ne doit pas transmettre secrets, images ou entrées sur ce canal sans protection supplémentaire.
-- Décision : ne pas activer l'injection distante avant identité cryptographique, transport local sécurisé, épinglage et preuve de reconnexion.
+- Vérification : le protocole actif utilise encore HTTP et WebSocket en clair ; Android déclare `android:usesCleartextTraffic="true"`.
+- Fondation validée : identité TLS RSA 2048 persistante, certificat auto-signé, empreinte SHA-256, contexte serveur TLS et test de connexion avec épinglage réussi.
+- Limite restante : le serveur et le client CastFlow actifs ne sont pas encore basculés sur le canal sécurisé.
+- Décision : ne pas activer l'injection distante avant intégration effective de ce canal et de la preuve de reconnexion.
 
 ### CF-006 — Limites Android lorsque l'écran est éteint ou verrouillé
 
@@ -121,20 +122,20 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 
 ### CF-012 — Échec CI au contrôle de formatage
 
-- Statut : corrigé localement, nouvelle CI en attente.
+- Statut : résolu.
 - Gravité : moyenne.
 - Vérification : l'exécution `35793492768` a installé Flutter et les dépendances, puis a échoué à l'étape `dart format`; analyse et tests ont été ignorés.
 - Diagnostic vérifié : Dart 3.13.0 a identifié uniquement `lib/remote/control_protocol.dart` comme non formaté.
 - Correction : fichier réécrit par `dart format`; un second contrôle retourne zéro fichier à modifier.
-- Condition de fermeture : nouvelle CI complète réussie.
+- Validation : l'exécution CI `35794668297` a réussi formatage, analyse et tests.
 
 ### CF-013 — Trois violations du lint sur les accolades
 
-- Statut : corrigé localement, validation complète en cours.
+- Statut : résolu.
 - Gravité : faible.
 - Vérification : `flutter analyze` avec Flutter 3.47.0 a signalé trois occurrences de `curly_braces_in_flow_control_structures` dans `lib/remote/control_protocol.dart`.
 - Correction : ajout d'accolades autour des trois blocs conditionnels.
-- Condition de fermeture : `flutter analyze` et la CI doivent réussir.
+- Validation : `flutter analyze` local et CI réussis.
 
 ### CF-014 — Dépendances plus récentes disponibles
 
@@ -150,6 +151,15 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Vérification acquise : la version officielle `flutter_secure_storage 11.2.0` annonce Android et Windows, exige Dart ≥ 3.8 et Flutter ≥ 3.19; le projet respecte ces versions et Android minSdk 23.
 - Vérification manquante : aucune écriture/lecture réelle n'a encore été exécutée dans Android Keystore ni Windows Credential Manager sur les appareils cibles.
 - Mesure : l'interface est testée avec un coffre mémoire; ne pas déclarer la persistance native validée avant essais physiques.
+
+### CF-016 — État Git du sandbox restauré sur une ancienne base entre deux tours
+
+- Statut : résolu pour le lot courant, prévention requise à chaque reprise.
+- Gravité : haute pour la production de patches.
+- Vérification : le pointeur local du sandbox était revenu à `3494b9e` alors que GitHub était à `f1bf812`; les fichiers récents apparaissaient donc comme modifications non validées.
+- Cause observée : la configuration Git distante du sandbox n'est pas persistée entre tous les tours et les répertoires exclus des snapshots peuvent disparaître.
+- Correction : sauvegarde uniquement du nouveau lot TLS, recréation de `origin`, `fetch`, `reset --hard origin/feature/remote-control-lan`, puis réapplication du seul lot courant.
+- Règle préventive : vérifier `git rev-parse HEAD` contre GitHub et recréer `origin` au début de chaque reprise avant toute modification.
 
 ## 4. Décisions d'architecture
 
@@ -193,6 +203,8 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-22 | Formatage après coffre sécurisé | 23 fichiers, 0 changement restant |
 | 2026-09-22 | Négociation des capacités client/serveur | Analyse 0 problème, tests 45/45 réussis |
 | 2026-09-22 | Machine d'état des sessions de contrôle | Analyse 0 problème, tests 53/53 réussis |
+| 2026-09-22 | CI GitHub Actions `35794668297` | Formatage, analyse et tests réussis |
+| 2026-09-22 | Identité TLS et épinglage | Analyse 0 problème, tests 57/57 réussis |
 
 ## 6. Travail réalisé pour le contrôle distant
 
@@ -224,7 +236,11 @@ Ajouts suivants validés :
 - aucun contrôle natif annoncé par défaut tant qu'aucun adaptateur n'est actif ;
 - machine d'état imposant approbation locale, transitions valides et session unique ;
 - rejet des événements d'entrée rejoués, négatifs ou désordonnés ;
-- expiration automatique des demandes sans décision après 30 secondes.
+- expiration automatique des demandes sans décision après 30 secondes ;
+- identité TLS RSA 2048 générée hors thread principal ;
+- certificat et clé privée persistés dans le coffre sécurisé ;
+- empreinte SHA-256 recalculée et vérifiée au chargement ;
+- contexte serveur TLS et connexion cliente avec épinglage testés.
 
 ## 7. Prochaines étapes vérifiables
 

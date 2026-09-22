@@ -102,6 +102,14 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Vérification : `README.md` et les fichiers `docs/*.md` du clone sandbox sont identifiés comme textes UTF-8.
 - Conclusion vérifiée : l'altération observée concerne le chemin d'affichage PowerShell/pont ; aucune corruption des fichiers contrôlés n'a été démontrée.
 
+### CF-010 — Coffre sécurisé pour les secrets de confiance non implémenté
+
+- Statut : ouvert.
+- Gravité : critique avant persistance d'un appareil approuvé.
+- Vérification : `SettingsRepository` utilise actuellement `SharedPreferences` et aucun coffre natif n'est déclaré dans `pubspec.yaml`.
+- Impact : le secret d'appairage ne doit pas être persisté tant qu'un stockage protégé Windows/Android n'est pas intégré et vérifié.
+- Mesure actuelle : le protocole de preuve manipule le secret uniquement en mémoire et documente explicitement l'interdiction de SharedPreferences.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle
@@ -133,6 +141,8 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-22 | Encodage des documents dans le sandbox | UTF-8 vérifié |
 | 2026-09-22 | Publication et récupération du commit `37b773a` | Réussies |
 | 2026-09-22 | Exécution des nouveaux tests Flutter | Impossible, CF-001 |
+| 2026-09-22 | Dépendance cryptographique existante | `crypto 3.0.7` vérifiée dans `pubspec.lock` |
+| 2026-09-22 | Stockage sécurisé existant | Aucun coffre natif trouvé ; CF-010 ouvert |
 
 ## 6. Travail réalisé pour le contrôle distant
 
@@ -145,6 +155,15 @@ Ajouts :
 - `test/control_protocol_test.dart`.
 
 Le protocole couvre les capacités, états, demandes de session et événements d'entrée validés. Il ne capture pas encore d'écran et n'injecte encore aucune entrée native.
+
+Travail en cours dans le lot suivant :
+
+- secret d'appairage aléatoire de 256 bits ;
+- challenge limité à 30 secondes ;
+- preuve HMAC-SHA256 liée aux deux appareils ;
+- comparaison constante ;
+- consommation unique du challenge, y compris après une tentative invalide ;
+- tests de validité, expiration, rejeu et substitution d'identité.
 
 ## 7. Prochaines étapes vérifiables
 

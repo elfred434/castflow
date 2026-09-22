@@ -110,6 +110,14 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Impact : le secret d'appairage ne doit pas être persisté tant qu'un stockage protégé Windows/Android n'est pas intégré et vérifié.
 - Mesure actuelle : le protocole de preuve manipule le secret uniquement en mémoire et documente explicitement l'interdiction de SharedPreferences.
 
+### CF-011 — La CI ne se déclenchait pas sur la branche de développement
+
+- Statut : corrigé, validation distante en attente.
+- Gravité : haute dans un environnement sans SDK Flutter local.
+- Vérification : l'API GitHub Actions a retourné zéro exécution pour `feature/remote-control-lan` après publication ; `.github/workflows/ci.yml` limitait les push à `main`, `master` et `develop`.
+- Correction : déclencher le workflow CI sur toutes les branches poussées tout en conservant les branches cibles des pull requests.
+- Condition de fermeture : observer une exécution GitHub Actions et consigner son résultat.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle

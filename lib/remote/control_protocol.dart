@@ -46,8 +46,12 @@ abstract final class ControlMessageType {
   static const input = 'CONTROL_INPUT';
   static const frameInfo = 'CONTROL_FRAME_INFO';
   static const error = 'CONTROL_ERROR';
+  static const trustRequest = 'TRUST_REQUEST';
+  static const trustAccept = 'TRUST_ACCEPT';
+  static const trustDeny = 'TRUST_DENY';
   static const trustChallenge = 'TRUST_CHALLENGE';
   static const trustProof = 'TRUST_PROOF';
+  static const trustOk = 'TRUST_OK';
   static const trustRevoke = 'TRUST_REVOKE';
 }
 

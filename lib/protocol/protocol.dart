@@ -67,6 +67,7 @@ String buildConnectUrl({
   required int wsPort,
   required DeviceInfo device,
   String? pin,
+  bool secure = false,
 }) {
   return Uri(
     scheme: 'castflow',
@@ -80,6 +81,7 @@ String buildConnectUrl({
       'kind': device.kind,
       'platform': device.platform,
       'pin': ?pin,
+      if (secure) 'secure': '1',
       if (device.fingerprint.isNotEmpty) 'fp': device.fingerprint,
     },
   ).toString();
@@ -108,6 +110,7 @@ RemoteDevice? parseConnectUrl(String raw) {
     httpPort: http,
     wsPort: ws,
     requiresPin: query.containsKey('pin'),
+    secure: query['secure'] == '1',
     source: 'qr',
   );
 }

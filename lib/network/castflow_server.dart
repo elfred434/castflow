@@ -7,6 +7,9 @@ import '../core/constants.dart';
 import '../core/models.dart';
 import '../protocol/protocol.dart';
 import '../remote/control_protocol.dart';
+import '../remote/transport_identity.dart';
+import '../remote/trust_protocol.dart';
+import '../remote/trusted_peer_store.dart';
 import '../security/file_hash.dart';
 import '../security/security.dart';
 
@@ -17,6 +20,8 @@ class CastFlowServer {
     this.pin,
     this.autoAccept = false,
     this.controlCapabilities = const ControlCapabilities(values: {}),
+    this.transportIdentity,
+    this.trustedPeers,
   });
 
   final DeviceInfo device;
@@ -24,6 +29,10 @@ class CastFlowServer {
   String? pin;
   bool autoAccept;
   final ControlCapabilities controlCapabilities;
+  final TransportIdentity? transportIdentity;
+  final TrustedPeerStore? trustedPeers;
+
+  bool get secureTransport => transportIdentity != null;
 
   HttpServer? _httpServer;
   HttpServer? _wsServer;
@@ -34,6 +43,8 @@ class CastFlowServer {
   final Set<_ClientSession> _clients = {};
   final Map<String, _PinGuard> _pinGuards = {};
   final Set<String> _reservedFinalPaths = {};
+  final TrustChallengeRegistry _trustChallenges = TrustChallengeRegistry();
+  final Map<String, _PendingTrustRequest> _pendingTrust = {};
 
   final StreamController<TransferSnapshot> _transferController =
       StreamController<TransferSnapshot>.broadcast();
@@ -41,10 +52,14 @@ class CastFlowServer {
       StreamController<TransferSnapshot>.broadcast();
   final StreamController<DeviceInfo> _peerController =
       StreamController<DeviceInfo>.broadcast();
+  final StreamController<IncomingTrustRequest> _trustRequestController =
+      StreamController<IncomingTrustRequest>.broadcast();
 
   Stream<TransferSnapshot> get transfers => _transferController.stream;
   Stream<TransferSnapshot> get incomingTransfers => _incomingController.stream;
   Stream<DeviceInfo> get connectedPeers => _peerController.stream;
+  Stream<IncomingTrustRequest> get trustRequests =>
+      _trustRequestController.stream;
 
   ControlCapabilities? controlCapabilitiesFor(String deviceId) {
     for (final client in _clients) {
@@ -64,13 +79,19 @@ class CastFlowServer {
     int preferredWsPort = CastFlowProtocol.defaultWsPort,
   }) async {
     if (_httpServer != null) return;
+    final tlsIdentity = transportIdentity;
+    if (tlsIdentity != null && device.fingerprint != tlsIdentity.fingerprint) {
+      throw StateError('Empreinte TLS différente de l’identité annoncée');
+    }
     await Directory(downloadDirectory).create(recursive: true);
     _httpServer = await _bindFrom(preferredHttpPort);
     httpPort = _httpServer!.port;
     _httpServer!.listen(_handleHttpSafely);
 
     try {
-      _wsServer = await _bindFrom(preferredWsPort);
+      _wsServer = tlsIdentity == null
+          ? await _bindFrom(preferredWsPort)
+          : await _bindSecureFrom(preferredWsPort, tlsIdentity);
       wsPort = _wsServer!.port;
       _wsServer!.listen(_handleWebSocketUpgrade);
     } catch (_) {
@@ -102,11 +123,43 @@ class CastFlowServer {
     );
   }
 
+  Future<HttpServer> _bindSecureFrom(
+    int preferred,
+    TransportIdentity identity,
+  ) async {
+    if (preferred == 0) {
+      return HttpServer.bindSecure(
+        InternetAddress.anyIPv4,
+        0,
+        identity.createServerContext(),
+        shared: true,
+      );
+    }
+    Object? lastError;
+    for (var candidate = preferred; candidate < preferred + 20; candidate++) {
+      try {
+        return await HttpServer.bindSecure(
+          InternetAddress.anyIPv4,
+          candidate,
+          identity.createServerContext(),
+          shared: true,
+        );
+      } on SocketException catch (error) {
+        lastError = error;
+      }
+    }
+    throw SocketException(
+      'Aucun port TLS disponible près de $preferred: $lastError',
+    );
+  }
+
   Future<void> stop() async {
     for (final client in _clients.toList()) {
       await client.socket.close();
     }
     _clients.clear();
+    _pendingTrust.clear();
+    _trustChallenges.clear();
     await _wsServer?.close(force: true);
     await _httpServer?.close(force: true);
     _wsServer = null;
@@ -120,6 +173,7 @@ class CastFlowServer {
     await _transferController.close();
     await _incomingController.close();
     await _peerController.close();
+    await _trustRequestController.close();
   }
 
   Future<void> _handleHttpSafely(HttpRequest request) async {
@@ -161,7 +215,7 @@ class CastFlowServer {
         'device': device.toJson(),
         'http': httpPort,
         'ws': wsPort,
-        'secure': false,
+        'secure': secureTransport,
         'requiresPin': pin != null,
       });
     }
@@ -485,10 +539,15 @@ class CastFlowServer {
     _clients.add(client);
     socket.listen(
       (raw) => _handleMessage(client, raw),
-      onDone: () => _clients.remove(client),
-      onError: (_) => _clients.remove(client),
+      onDone: () => _removeClient(client),
+      onError: (_) => _removeClient(client),
       cancelOnError: true,
     );
+  }
+
+  void _removeClient(_ClientSession client) {
+    _clients.remove(client);
+    _pendingTrust.removeWhere((_, pending) => pending.client == client);
   }
 
   Future<void> _handleMessage(_ClientSession client, Object? raw) async {
@@ -530,6 +589,25 @@ class CastFlowServer {
             : const ControlCapabilities(values: {});
         client.authenticated = pin == null;
         if (client.authenticated) client.sessionToken = secureId('session');
+        TrustChallenge? trustChallenge;
+        final peerDevice = client.device;
+        final trustStore = trustedPeers;
+        if (!client.authenticated &&
+            secureTransport &&
+            peerDevice != null &&
+            trustStore != null) {
+          final credential = await trustStore.credential(peerDevice.id);
+          if (credential != null &&
+              constantTimeEquals(
+                credential.peer.fingerprint,
+                peerDevice.fingerprint,
+              )) {
+            trustChallenge = _trustChallenges.issue(
+              requesterDeviceId: peerDevice.id,
+              targetDeviceId: device.id,
+            );
+          }
+        }
         _sendToClient(
           client,
           message.reply('HELLO_ACK', {
@@ -537,6 +615,8 @@ class CastFlowServer {
             'nonce': client.nonce,
             'requiresPin': pin != null,
             'trusted': false,
+            if (trustChallenge != null)
+              'trustChallenge': trustChallenge.toJson(),
             'controlCapabilities': controlCapabilities.toJson(),
             if (client.authenticated) 'sessionToken': client.sessionToken,
           }),
@@ -544,6 +624,10 @@ class CastFlowServer {
         if (client.device != null) _peerController.add(client.device!);
       case 'AUTH':
         _authenticate(client, message);
+      case ControlMessageType.trustProof:
+        await _authenticateTrusted(client, message);
+      case ControlMessageType.trustRequest:
+        _requestTrust(client, message);
       case ControlMessageType.capabilities:
         if (!client.authenticated) {
           _sendToClient(
@@ -581,6 +665,154 @@ class CastFlowServer {
           reason: message.data['reason']?.toString() ?? 'Annulé par le pair',
         );
     }
+  }
+
+  Future<void> _authenticateTrusted(
+    _ClientSession client,
+    Envelope message,
+  ) async {
+    final peerDevice = client.device;
+    final store = trustedPeers;
+    final challengeId = message.data['challengeId']?.toString() ?? '';
+    final proof = message.data['proof']?.toString() ?? '';
+    final credential = peerDevice == null || store == null
+        ? null
+        : await store.credential(peerDevice.id);
+    final valid =
+        credential != null &&
+        constantTimeEquals(
+          credential.peer.fingerprint,
+          peerDevice!.fingerprint,
+        ) &&
+        _trustChallenges.consume(
+          challengeId: challengeId,
+          requesterDeviceId: peerDevice.id,
+          targetDeviceId: device.id,
+          secret: credential.secret,
+          proof: proof,
+        );
+    if (!valid) {
+      _sendToClient(
+        client,
+        message.reply(ControlMessageType.error, {
+          'code': 'TRUST_PROOF_INVALID',
+          'message': 'Preuve de confiance invalide ou expirée',
+        }),
+      );
+      return;
+    }
+    client.authenticated = true;
+    client.sessionToken = secureId('session');
+    await store!.updateLastSeen(peerDevice.id, DateTime.now());
+    _sendToClient(
+      client,
+      message.reply(ControlMessageType.trustOk, {
+        'sessionToken': client.sessionToken,
+      }),
+    );
+  }
+
+  void _requestTrust(_ClientSession client, Envelope message) {
+    final peerDevice = client.device;
+    if (!secureTransport ||
+        trustedPeers == null ||
+        !client.authenticated ||
+        peerDevice == null) {
+      _sendToClient(
+        client,
+        message.reply(ControlMessageType.error, {
+          'code': 'TRUST_UNAVAILABLE',
+          'message': 'Appairage sécurisé indisponible',
+        }),
+      );
+      return;
+    }
+    final requested = <ControlCapability>{};
+    final rawCapabilities = message.data['capabilities'];
+    if (rawCapabilities is List) {
+      for (final raw in rawCapabilities) {
+        for (final capability in ControlCapability.values) {
+          if (capability.name == raw?.toString() &&
+              controlCapabilities.values.contains(capability)) {
+            requested.add(capability);
+          }
+        }
+      }
+    }
+    if (requested.isEmpty) {
+      _sendToClient(
+        client,
+        message.reply(ControlMessageType.error, {
+          'code': 'NO_CAPABILITY',
+          'message': 'Aucune capacité de contrôle demandée',
+        }),
+      );
+      return;
+    }
+    final request = IncomingTrustRequest(
+      id: message.id,
+      device: peerDevice,
+      requestedCapabilities: requested,
+      createdAt: DateTime.now(),
+    );
+    _pendingTrust[request.id] = _PendingTrustRequest(
+      request: request,
+      client: client,
+    );
+    _trustRequestController.add(request);
+  }
+
+  Future<void> approveTrust(
+    String requestId, {
+    required Set<ControlCapability> capabilities,
+  }) async {
+    final pending = _pendingTrust.remove(requestId);
+    final store = trustedPeers;
+    if (pending == null || store == null || capabilities.isEmpty) return;
+    final granted = capabilities.intersection(
+      pending.request.requestedCapabilities,
+    );
+    if (granted.isEmpty) return;
+    final secret = generateTrustSecret();
+    final now = DateTime.now().toUtc();
+    final peer = pending.request.device;
+    await store.approve(
+      peer: TrustedPeer(
+        deviceId: peer.id,
+        name: peer.name,
+        fingerprint: peer.fingerprint,
+        approvedAt: now,
+        lastSeenAt: now,
+        capabilities: granted,
+      ),
+      secret: secret,
+    );
+    _sendToClient(
+      pending.client,
+      Envelope(
+        type: ControlMessageType.trustAccept,
+        replyTo: requestId,
+        data: {
+          'secret': secret,
+          'capabilities': granted
+              .map((capability) => capability.name)
+              .toList(growable: false),
+        },
+      ),
+    );
+  }
+
+  void rejectTrust(String requestId, {String reason = 'Appairage refusé'}) {
+    final pending = _pendingTrust.remove(requestId);
+    if (pending == null) return;
+    _sendToClient(
+      pending.client,
+      Envelope(
+        type: ControlMessageType.trustDeny,
+        replyTo: requestId,
+        data: {'reason': reason},
+      ),
+    );
   }
 
   void _authenticate(_ClientSession client, Envelope message) {
@@ -875,6 +1107,27 @@ class CastFlowServer {
     'code': code,
     'message': message,
   });
+}
+
+class IncomingTrustRequest {
+  const IncomingTrustRequest({
+    required this.id,
+    required this.device,
+    required this.requestedCapabilities,
+    required this.createdAt,
+  });
+
+  final String id;
+  final DeviceInfo device;
+  final Set<ControlCapability> requestedCapabilities;
+  final DateTime createdAt;
+}
+
+class _PendingTrustRequest {
+  const _PendingTrustRequest({required this.request, required this.client});
+
+  final IncomingTrustRequest request;
+  final _ClientSession client;
 }
 
 class _ClientSession {

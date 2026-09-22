@@ -13,7 +13,8 @@ Dernière mise à jour : 22 septembre 2026.
 - Nouvelle cible : contrôle distant bidirectionnel Windows ↔ Android sur réseau local.
 - Distribution Android retenue : APK privée.
 - Mode de reconnexion retenu : session approuvée persistante dans les limites imposées par Android.
-- Dernier commit de fondation observé : `37b773a feat(remote): definir le protocole de controle LAN`.
+- Dernier commit officiel vérifié : `2906dd1 feat(security): créer une identité TLS épinglable`.
+- Lot local en cours : intégration WSS de production et reconnexion par preuve de confiance ; non encore publié.
 
 ## 2. Règles applicables
 
@@ -24,14 +25,13 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 
 ## 3. Registre des problèmes, bugs et limitations
 
-### CF-001 — Flutter indisponible dans les environnements de travail
+### CF-001 — Flutter initialement indisponible dans les environnements de travail
 
-- Statut : partiellement contourné.
-- Gravité : bloquant pour l'analyse Flutter et les builds locaux.
+- Statut : résolu dans le sandbox ; à vérifier sur Windows.
+- Gravité initiale : bloquante pour l'analyse Flutter et les tests locaux.
 - Vérification initiale : les commandes `flutter` et `dart` n'étaient présentes ni dans le `PATH` du terminal Windows contrôlé ni dans le sandbox au 22 septembre 2026.
-- Action vérifiée : le SDK Dart autonome 3.13.0 a été téléchargé dans le cache non versionné du sandbox ; `dart format` peut maintenant y être exécuté.
-- Limite restante : Flutter reste absent du terminal Windows et du sandbox ; `flutter analyze`, `flutter test` et les builds restent confiés à la CI.
-- Condition de fermeture : installation vérifiée de Flutter ou environnement local équivalent à la CI.
+- Correction vérifiée : Flutter officiel 3.47.0 / Dart 3.13.0 a été installé et vérifié dans le cache du sandbox ; formatage, analyse et tests y sont exécutables.
+- Limite restante : Flutter dans le terminal Windows n’a pas été revérifié et reste « à vérifier » ; les builds Windows/Android physiques ne sont pas couverts par les tests sandbox.
 
 ### CF-002 — Dépendances JavaScript suivies par Git
 
@@ -58,14 +58,14 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Vérification : ils apparaissent comme non suivis dans le terminal Windows mais ne sont pas présents dans le clone Git du sandbox.
 - Décision : ne pas les inclure dans les commits applicatifs.
 
-### CF-005 — Transport de contrôle actuel non chiffré
+### CF-005 — Sécurisation du transport de contrôle
 
-- Statut : en cours de correction.
-- Gravité : critique avant activation du contrôle distant.
-- Vérification : le protocole actif utilise encore HTTP et WebSocket en clair ; Android déclare `android:usesCleartextTraffic="true"`.
-- Fondation validée : identité TLS RSA 2048 persistante, certificat auto-signé, empreinte SHA-256, contexte serveur TLS et test de connexion avec épinglage réussi.
-- Limite restante : le serveur et le client CastFlow actifs ne sont pas encore basculés sur le canal sécurisé.
-- Décision : ne pas activer l'injection distante avant intégration effective de ce canal et de la preuve de reconnexion.
+- Statut : résolu pour le WebSocket de contrôle ; chiffrement des données de fichiers encore ouvert sous CF-019.
+- Gravité initiale : critique avant activation du contrôle distant.
+- Correction vérifiée : le serveur actif utilise `HttpServer.bindSecure`, le client sélectionne `wss`, refuse une empreinte TLS erronée et épingle l’empreinte approuvée lors des reconnexions.
+- Propagation vérifiée : `/info`, la découverte LAN et le QR annoncent désormais l’état sécurisé réel.
+- Validation : handshake WSS réussi avec la bonne empreinte et rejeté avec une empreinte falsifiée ; tests d’intégration réussis.
+- Décision maintenue : aucune injection distante ne doit être activée hors de ce canal WSS authentifié.
 
 ### CF-006 — Limites Android lorsque l'écran est éteint ou verrouillé
 
@@ -87,13 +87,12 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Impact : évolution du contrôle distant plus risquée si les nouvelles responsabilités y sont ajoutées directement.
 - Décision : créer des modules `remote/` et des adaptateurs dédiés au lieu d'ajouter toute la logique à ces fichiers.
 
-### CF-008 — Tests de contrôle ajoutés mais non exécutés localement
+### CF-008 — Tests de contrôle ajoutés mais initialement non exécutés localement
 
-- Statut : à vérifier.
-- Gravité : moyenne.
-- Fichier : `test/control_protocol_test.dart`.
-- Cause : CF-001.
-- Condition de fermeture : CI réussie ou installation locale vérifiée de Flutter.
+- Statut : résolu.
+- Gravité initiale : moyenne.
+- Correction : installation vérifiée de Flutter 3.47.0 dans le cache du sandbox.
+- Validation : les tests du protocole, des sessions, du transport TLS et de la confiance font partie des 60 tests locaux réussis ; la CI du lot précédent était également verte.
 
 ### CF-009 — Affichage de caractères altérés dans certains retours PowerShell
 
@@ -161,6 +160,41 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Correction : sauvegarde uniquement du nouveau lot TLS, recréation de `origin`, `fetch`, `reset --hard origin/feature/remote-control-lan`, puis réapplication du seul lot courant.
 - Règle préventive : vérifier `git rev-parse HEAD` contre GitHub et recréer `origin` au début de chaque reprise avant toute modification.
 
+### CF-017 — Échecs intermédiaires pendant l’intégration confiance/WSS
+
+- Statut : résolu.
+- Gravité : faible, sans publication.
+- Première validation : l’analyse a trouvé deux erreurs de compilation (`TrustedPeerStore?` non promu et appel de `keys` sur un `Set`) ; les tests ne pouvaient donc pas compiler ce lot.
+- Incident d’édition : deux remplacements parallèles visant le même fichier ont laissé un fragment `ge;` en fin de `castflow_server.dart` et perdu l’un des remplacements.
+- Correction : réparations séquentielles, reformatage, nouvelle analyse et nouvelle exécution des tests.
+- Validation finale : analyse sans problème et 60/60 tests réussis.
+- Prévention : ne plus paralléliser des écritures distinctes sur un même fichier.
+
+### CF-018 — Authentification de la toute première découverte
+
+- Statut : ouvert.
+- Gravité : haute sur un LAN hostile.
+- Vérification : l’épinglage protège les connexions suivantes avec l’empreinte mémorisée ; le QR transporte également l’empreinte du certificat.
+- Limite : une empreinte reçue pour la première fois par découverte LAN n’est pas authentifiée indépendamment. La découverte seule reste de type TOFU et ne doit pas être présentée comme résistante à un attaquant actif présent dès le premier appairage.
+- Mesure actuelle : PIN et approbation locale explicite ; privilégier le QR affiché physiquement pour la première connexion.
+- Suite requise : définir et valider une cérémonie de premier appairage vérifiable avant distribution.
+
+### CF-019 — Corps des transferts de fichiers encore transportés en HTTP clair
+
+- Statut : ouvert.
+- Gravité : haute pour la confidentialité des fichiers.
+- Vérification : le contrôle et l’échange du secret utilisent WSS, mais les routes `/upload`, `/download`, `/offer` et `/cancel` restent sur le serveur HTTP historique avec jetons et session.
+- Impact : l’intégrité et l’autorisation existantes sont conservées, mais le contenu des fichiers n’est pas chiffré sur le LAN.
+- Décision : ne pas confondre la sécurisation du canal de contrôle avec celle du contenu des fichiers ; migrer ou chiffrer ces routes dans un lot dédié sans casser le transfert existant.
+
+### CF-020 — Appairage persistant non encore activable sans adaptateur de contrôle
+
+- Statut : limitation temporaire volontaire.
+- Gravité : fonctionnelle.
+- Vérification : le protocole d’appairage explicite, le stockage bilatéral du secret et la reconnexion HMAC sont testés en intégration avec des capacités injectées.
+- Comportement de production : CastFlow n’annonce volontairement aucune capacité native tant que les adaptateurs Windows/Android n’existent pas ; le bouton d’approbation n’est donc affiché que lorsqu’un pair annonce réellement des capacités.
+- Décision : ne pas annoncer de fausses capacités uniquement pour rendre l’interface active.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle
@@ -205,6 +239,11 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-22 | Machine d'état des sessions de contrôle | Analyse 0 problème, tests 53/53 réussis |
 | 2026-09-22 | CI GitHub Actions `35794668297` | Formatage, analyse et tests réussis |
 | 2026-09-22 | Identité TLS et épinglage | Analyse 0 problème, tests 57/57 réussis |
+| 2026-09-22 | Première validation intégration confiance/WSS | Échec de compilation : 2 erreurs Dart ; CF-017 |
+| 2026-09-22 | Validation intermédiaire ciblée | Analyse 0 problème, 12/12 tests d’intégration réussis |
+| 2026-09-22 | Canal WSS de production et empreinte erronée | Connexion correcte acceptée, mauvaise empreinte rejetée |
+| 2026-09-22 | Appairage explicite et reconnexion HMAC sans nouveau PIN | Test d’intégration réussi |
+| 2026-09-22 | Validation finale du lot local | Formatage stable, analyse 0 problème, 60/60 tests réussis |
 
 ## 6. Travail réalisé pour le contrôle distant
 
@@ -218,14 +257,16 @@ Ajouts :
 
 Le protocole couvre les capacités, états, demandes de session et événements d'entrée validés. Il ne capture pas encore d'écran et n'injecte encore aucune entrée native.
 
-Travail en cours dans le lot suivant :
+Fondations de confiance maintenant reliées au handshake dans le lot local :
 
-- secret d'appairage aléatoire de 256 bits ;
+- secret d'appairage aléatoire de 256 bits transmis uniquement après authentification sur WSS ;
+- approbation locale explicite avec capacités limitées à celles réellement annoncées par l’hôte ;
+- stockage du même secret dans le coffre de chaque pair ;
 - challenge limité à 30 secondes ;
 - preuve HMAC-SHA256 liée aux deux appareils ;
-- comparaison constante ;
-- consommation unique du challenge, y compris après une tentative invalide ;
-- tests de validité, expiration, rejeu et substitution d'identité.
+- comparaison constante et consommation unique du challenge ;
+- reconnexion validée sans nouveau PIN ;
+- refus d’un retour en WebSocket clair pour un pair déjà approuvé.
 
 Ajouts suivants validés :
 
@@ -244,12 +285,13 @@ Ajouts suivants validés :
 
 ## 7. Prochaines étapes vérifiables
 
-1. Relier le challenge de confiance et le coffre au handshake client/serveur.
-2. Ajouter révocation et rotation depuis l'interface utilisateur.
-3. Sécuriser le transport local et vérifier l'épinglage avant toute injection distante.
-4. Implémenter la machine d'état demande/acceptation/arrêt d'une session de contrôle.
-5. Commencer l'adaptateur Windows uniquement après validation des étapes précédentes.
-6. Tester le coffre sur appareils Windows et Android physiques.
+1. Publier ce lot WSS/appairage après application du patch et validation sur Windows.
+2. Ajouter la révocation et une rotation sûre des secrets/certificats depuis l’interface utilisateur.
+3. Définir puis valider la cérémonie de première association contre un attaquant LAN actif (CF-018).
+4. Chiffrer les corps de fichiers sans régression du transfert existant (CF-019).
+5. Implémenter les adaptateurs Windows de capture et d’entrée, puis annoncer uniquement leurs capacités réellement actives.
+6. Relier la machine d’état de contrôle déjà testée aux adaptateurs et aux écrans de contrôle.
+7. Tester le coffre, WSS et la reconnexion sur appareils Windows et Android physiques.
 
 ## 8. Modèle pour les prochaines entrées
 

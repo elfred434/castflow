@@ -13,8 +13,8 @@ Dernière mise à jour : 22 septembre 2026.
 - Nouvelle cible : contrôle distant bidirectionnel Windows ↔ Android sur réseau local.
 - Distribution Android retenue : APK privée.
 - Mode de reconnexion retenu : session approuvée persistante dans les limites imposées par Android.
-- Dernier commit officiel vérifié : `2906dd1 feat(security): créer une identité TLS épinglable`.
-- Lot local en cours : intégration WSS de production et reconnexion par preuve de confiance ; non encore publié.
+- Dernier commit officiel vérifié : `de251e9 feat(security): sécuriser le canal et la reconnexion`.
+- CI GitHub Actions du commit : exécution `35796517545` terminée avec succès.
 
 ## 2. Règles applicables
 
@@ -195,6 +195,16 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Comportement de production : CastFlow n’annonce volontairement aucune capacité native tant que les adaptateurs Windows/Android n’existent pas ; le bouton d’approbation n’est donc affiché que lorsqu’un pair annonce réellement des capacités.
 - Décision : ne pas annoncer de fausses capacités uniquement pour rendre l’interface active.
 
+### CF-021 — Incidents de transfert/publication du patch WSS
+
+- Statut : résolu.
+- Gravité : faible, sans perte de code.
+- Premier échec : l’appel direct `./arena.sh put` a retourné « Permission denied », le script n’étant pas exécutable dans le sandbox restauré.
+- Correction : invocation explicite avec `bash ./arena.sh` ; le patch de 52 056 octets a été transféré et son SHA-256 a été vérifié identique sur Windows.
+- Second échec : une commande PowerShell contenant `$LASTEXITCODE` et des accents graves a été interprétée prématurément par Bash, produisant une erreur de syntaxe avant toute application du patch.
+- Correction : nouvelle commande avec `$?` échappé ; `git am` et `git push` ont réussi.
+- Résultat vérifié : commit officiel `de251e9`, seuls les trois fichiers locaux du pont restent non suivis sur Windows.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle
@@ -244,6 +254,8 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-22 | Canal WSS de production et empreinte erronée | Connexion correcte acceptée, mauvaise empreinte rejetée |
 | 2026-09-22 | Appairage explicite et reconnexion HMAC sans nouveau PIN | Test d’intégration réussi |
 | 2026-09-22 | Validation finale du lot local | Formatage stable, analyse 0 problème, 60/60 tests réussis |
+| 2026-09-22 | Patch WSS appliqué et poussé depuis Windows | Commit officiel `de251e9` |
+| 2026-09-22 | CI GitHub Actions `35796517545` | Réussie sur `de251e9` |
 
 ## 6. Travail réalisé pour le contrôle distant
 

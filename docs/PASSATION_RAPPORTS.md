@@ -127,6 +127,21 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Correction : fichier réécrit par `dart format`; un second contrôle retourne zéro fichier à modifier.
 - Condition de fermeture : nouvelle CI complète réussie.
 
+### CF-013 — Trois violations du lint sur les accolades
+
+- Statut : corrigé localement, validation complète en cours.
+- Gravité : faible.
+- Vérification : `flutter analyze` avec Flutter 3.47.0 a signalé trois occurrences de `curly_braces_in_flow_control_structures` dans `lib/remote/control_protocol.dart`.
+- Correction : ajout d'accolades autour des trois blocs conditionnels.
+- Condition de fermeture : `flutter analyze` et la CI doivent réussir.
+
+### CF-014 — Dépendances plus récentes disponibles
+
+- Statut : à étudier séparément.
+- Gravité : information.
+- Vérification : `flutter pub get` avec Flutter 3.47.0 signale 34 paquets ayant une version plus récente incompatible avec les contraintes actuelles.
+- Décision : ne pas mettre à jour en bloc sans audit de compatibilité ; ce constat n'empêche pas la validation de la version verrouillée actuelle.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle

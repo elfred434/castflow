@@ -192,6 +192,7 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-22 | Tests après coffre sécurisé | 44/44 réussis |
 | 2026-09-22 | Formatage après coffre sécurisé | 23 fichiers, 0 changement restant |
 | 2026-09-22 | Négociation des capacités client/serveur | Analyse 0 problème, tests 45/45 réussis |
+| 2026-09-22 | Machine d'état des sessions de contrôle | Analyse 0 problème, tests 53/53 réussis |
 
 ## 6. Travail réalisé pour le contrôle distant
 
@@ -220,7 +221,10 @@ Ajouts suivants validés :
 - création, lecture, classement, mise à jour et révocation des appareils approuvés ;
 - négociation bidirectionnelle des capacités de contrôle pendant le handshake ;
 - rafraîchissement authentifié des capacités distantes ;
-- aucun contrôle natif annoncé par défaut tant qu'aucun adaptateur n'est actif.
+- aucun contrôle natif annoncé par défaut tant qu'aucun adaptateur n'est actif ;
+- machine d'état imposant approbation locale, transitions valides et session unique ;
+- rejet des événements d'entrée rejoués, négatifs ou désordonnés ;
+- expiration automatique des demandes sans décision après 30 secondes.
 
 ## 7. Prochaines étapes vérifiables
 

@@ -270,6 +270,15 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Correction : suppression immédiate du fragment avant formatage, analyse ou publication.
 - Prévention : relire la zone modifiée après tout remplacement contenant une longue chaîne générée.
 
+### CF-029 — Publication automatique des exécutables
+
+- Statut : workflow ajouté; première exécution à valider.
+- Décision : un tag `v*` compile un APK Android release et un paquet Windows release portable, puis les joint à une GitHub Release marquée comme la plus récente.
+- Version initiale : `v0.2.0`, alignée sur `version: 0.2.0+2` du projet.
+- Android : en l’absence de `android/key.properties`, le profil release utilise actuellement la clé debug conformément à la configuration Gradle existante. Cet APK convient aux essais privés mais une clé de signature release persistante reste nécessaire avant une distribution durable.
+- Windows : le ZIP doit contenir tout le répertoire `Release`, pas seulement le fichier `.exe`, afin de conserver les DLL et données Flutter indispensables.
+- Sécurité : aucune clé ni aucun secret de signature n’est ajouté au dépôt.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle

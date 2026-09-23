@@ -13,8 +13,8 @@ Dernière mise à jour : 23 septembre 2026.
 - Nouvelle cible : contrôle distant bidirectionnel Windows ↔ Android sur réseau local.
 - Distribution Android retenue : APK privée.
 - Mode de reconnexion retenu : session approuvée persistante dans les limites imposées par Android.
-- Dernier commit officiel vérifié : `ff2857c feat(windows): ajouter les adaptateurs natifs de contrôle`.
-- CI GitHub Actions du commit : exécution `35843047193`, analyse/tests Linux et compilation Windows release réussis.
+- Dernier commit officiel vérifié : `923869f feat(remote): protéger les entrées par session approuvée`.
+- CI GitHub Actions du commit : exécution `35870246103`, analyse/tests Linux et compilation Windows release réussis.
 
 ## 2. Règles applicables
 
@@ -244,6 +244,14 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Correction : comparaison des représentations `toJson()` plutôt que des identités d’instance.
 - Validation : les 13 tests d’intégration réussissent après correction.
 
+### CF-026 — Identité Git locale perdue avant le commit de barrière
+
+- Statut : résolu.
+- Gravité : faible, sans perte de code.
+- Résultat : la première tentative de commit a échoué avec `Author identity unknown` et `empty ident name` après une nouvelle restauration du sandbox.
+- Correction : rétablissement de `user.name` et `user.email` dans la configuration locale du dépôt, puis commit réussi.
+- Prévention : vérifier aussi l’identité Git locale après chaque resynchronisation, en plus du remote et du HEAD.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle
@@ -303,6 +311,7 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-23 | CI Linux du lot adaptateur Windows | Formatage, analyse et 65/65 tests réussis |
 | 2026-09-23 | Première validation de la barrière de session | Analyse réussie, test en échec sur l’égalité d’instance ; CF-025 |
 | 2026-09-23 | Barrière réseau demande/approbation/entrée/pause/arrêt | Analyse 0 problème, 13/13 tests d’intégration puis 66/66 tests complets réussis |
+| 2026-09-23 | CI GitHub Actions `35870246103` | Analyse/tests Linux et compilation Windows release réussis sur `923869f` |
 
 ## 6. Travail réalisé pour le contrôle distant
 

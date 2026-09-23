@@ -2,7 +2,7 @@
 
 Ce document est le journal permanent du projet. Tout bug, incident, limitation, résultat de test, décision importante et vérification impossible doit y être ajouté.
 
-Dernière mise à jour : 22 septembre 2026.
+Dernière mise à jour : 23 septembre 2026.
 
 ## 1. État courant
 
@@ -13,8 +13,8 @@ Dernière mise à jour : 22 septembre 2026.
 - Nouvelle cible : contrôle distant bidirectionnel Windows ↔ Android sur réseau local.
 - Distribution Android retenue : APK privée.
 - Mode de reconnexion retenu : session approuvée persistante dans les limites imposées par Android.
-- Dernier commit officiel vérifié : `de251e9 feat(security): sécuriser le canal et la reconnexion`.
-- CI GitHub Actions du commit : exécution `35796517545` terminée avec succès.
+- Dernier commit officiel vérifié : `ff2857c feat(windows): ajouter les adaptateurs natifs de contrôle`.
+- CI GitHub Actions du commit : exécution `35843047193`, analyse/tests Linux et compilation Windows release réussis.
 
 ## 2. Règles applicables
 
@@ -214,14 +214,15 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Correction : nouvelle récupération de l’archive officielle Flutter 3.47.0, SHA-256 `26cd99d3d94b1367e6b50535a18aeef0282c10a535bbe3ec493534dcdab75296` vérifié avant extraction.
 - Validation après restauration : Flutter 3.47.0 / Dart 3.13.0, analyse sans problème et 65/65 tests réussis.
 
-### CF-023 — Adaptateur Windows natif non encore compilé sur Windows
+### CF-023 — Adaptateur Windows natif
 
-- Statut : à vérifier par la CI Windows.
-- Gravité : haute avant annonce des capacités natives.
+- Statut : compilation vérifiée ; exécution physique à vérifier.
+- Gravité restante : haute avant activation de bout en bout.
 - Travail réalisé : canal Flutter/C++ dédié, capture BGRA bornée du bureau virtuel avec GDI, et injection souris/clavier/texte avec `SendInput`.
-- Validation acquise : contrat Dart, dimensions et taille BGRA, rejet d’une trame tronquée et validation des entrées couverts par cinq tests réussis.
-- Validation manquante : le C++ n’a pas encore été compilé ni exécuté sur Windows, les outils Flutter/CMake/MSVC n’étant pas disponibles dans le `PATH` Windows contrôlé.
-- Mesure : ajout d’un job GitHub Actions `windows-latest` exécutant `flutter build windows --release`; aucune capacité native ne doit être annoncée avant réussite de ce job et intégration de la barrière de session.
+- Validation Dart : contrat, dimensions et taille BGRA, rejet d’une trame tronquée et validation des entrées couverts par cinq tests réussis.
+- Validation Windows : le job GitHub Actions `windows-latest` a exécuté `flutter build windows --release` avec succès dans l’exécution `35843047193`.
+- Validation manquante : capture et injection réelles sur le PC Windows physique, les outils Flutter/CMake/MSVC n’étant pas disponibles dans le `PATH` du terminal contrôlé.
+- Mesure : aucune capacité native n’est encore annoncée au réseau avant intégration de la barrière de session et du transport d’images.
 - Limites connues : GDI est un premier chemin de capture synchrone, pas encore le pipeline Windows Graphics Capture/Desktop Duplication prévu; `SendInput` reste soumis à UIPI et ne peut pas contrôler une application d’intégrité supérieure ni l’écran UAC.
 
 ## 4. Décisions d'architecture
@@ -279,7 +280,8 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-23 | Première tentative de validation de l’adaptateur Windows | Échec avant compilation : SDK Flutter du cache absent ; CF-022 |
 | 2026-09-23 | SDK Flutter 3.47.0 restauré | Archive officielle et SHA-256 vérifiés |
 | 2026-09-23 | Contrat Dart de l’adaptateur Windows | Analyse 0 problème, 5/5 tests ciblés puis 65/65 tests complets réussis |
-| 2026-09-23 | Compilation du C++ Windows | Non encore vérifiée ; job CI Windows ajouté |
+| 2026-09-23 | Première compilation du C++ Windows | Réussie en release dans la CI `35843047193` |
+| 2026-09-23 | CI Linux du lot adaptateur Windows | Formatage, analyse et 65/65 tests réussis |
 
 ## 6. Travail réalisé pour le contrôle distant
 

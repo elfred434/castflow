@@ -1,4 +1,5 @@
 import 'package:castflow/remote/control_protocol.dart';
+import 'package:castflow/remote/windows_control_backend.dart';
 import 'package:castflow/remote/windows_remote_adapter.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -99,4 +100,55 @@ void main() {
     );
     expect(calls, 0);
   });
+
+  test('encode la capture BGRA en JPEG hors du thread principal', () async {
+    final backend = WindowsControlBackend(adapter: _FakeWindowsAdapter());
+
+    expect(await backend.initialize(), isTrue);
+    final frame = await backend.captureJpeg(1280, 720);
+
+    expect(frame.width, 2);
+    expect(frame.height, 2);
+    expect(frame.bytes.take(2), [0xff, 0xd8]);
+    expect(frame.bytes.skip(frame.bytes.length - 2), [0xff, 0xd9]);
+  });
+}
+
+class _FakeWindowsAdapter extends WindowsRemoteAdapter {
+  @override
+  Future<bool> isAvailable() async => true;
+
+  @override
+  Future<ControlCapabilities> capabilities() async => const ControlCapabilities(
+    values: {ControlCapability.screenCapture, ControlCapability.pointer},
+    codecs: ['bgra'],
+  );
+
+  @override
+  Future<WindowsCapturedFrame> captureFrame({
+    int maxWidth = 1280,
+    int maxHeight = 720,
+  }) async => WindowsCapturedFrame(
+    width: 2,
+    height: 2,
+    stride: 8,
+    bgra: Uint8List.fromList([
+      0,
+      0,
+      255,
+      255,
+      0,
+      255,
+      0,
+      255,
+      255,
+      0,
+      0,
+      255,
+      255,
+      255,
+      255,
+      255,
+    ]),
+  );
 }

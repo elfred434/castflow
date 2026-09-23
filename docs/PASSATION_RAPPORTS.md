@@ -252,6 +252,24 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Correction : rétablissement de `user.name` et `user.email` dans la configuration locale du dépôt, puis commit réussi.
 - Prévention : vérifier aussi l’identité Git locale après chaque resynchronisation, en plus du remote et du HEAD.
 
+### CF-027 — Transport vidéo Windows vers contrôleur
+
+- Statut : implémenté en MVP, validation physique requise.
+- Gravité initiale : bloquante pour le contrôle visuel Android → Windows.
+- Correction : format binaire versionné et borné, trames JPEG sur le WebSocket WSS épinglé, séquence vidéo anti-désordre, capture uniquement pendant une session active approuvée, cadence bornée par la demande, suspension en pause et arrêt immédiat avec la session.
+- Production : le backend Windows convertit les pixels BGRA natifs en JPEG qualité 70 hors du thread principal; l’application n’annonce les capacités Windows qu’après initialisation réussie du canal natif. Un échec du backend désactive seulement le contrôle et ne bloque pas le serveur de transfert de fichiers.
+- Interface : ajout d’un écran de contrôle affichant le dernier JPEG et traduisant les gestes tactiles en coordonnées normalisées, avec limitation des déplacements à environ 60 événements/s.
+- Validation acquise : sérialisation/rejet du paquet binaire, encodage BGRA→JPEG et transport WSS après approbation testés.
+- Limites : exécution réelle Windows/Android non encore vérifiée; création répétée de travaux `Isolate.run` et JPEG logiciel à mesurer; clavier distant et adaptation dynamique de qualité non encore exposés dans l’interface.
+
+### CF-028 — Fragment de texte accidentel pendant l’édition du contrôleur
+
+- Statut : résolu avant validation et commit.
+- Gravité : faible.
+- Résultat : un remplacement a inséré temporairement un fragment explicatif dans la signature de `disconnect`, rendant le fichier Dart invalide.
+- Correction : suppression immédiate du fragment avant formatage, analyse ou publication.
+- Prévention : relire la zone modifiée après tout remplacement contenant une longue chaîne générée.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle
@@ -312,6 +330,9 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-23 | Première validation de la barrière de session | Analyse réussie, test en échec sur l’égalité d’instance ; CF-025 |
 | 2026-09-23 | Barrière réseau demande/approbation/entrée/pause/arrêt | Analyse 0 problème, 13/13 tests d’intégration puis 66/66 tests complets réussis |
 | 2026-09-23 | CI GitHub Actions `35870246103` | Analyse/tests Linux et compilation Windows release réussis sur `923869f` |
+| 2026-09-23 | Paquet vidéo binaire et transport WSS | Analyse 0 problème, tests de format, JPEG et intégration réussis |
+| 2026-09-23 | Lot vidéo ciblé | 23/23 tests ciblés réussis |
+| 2026-09-23 | Validation complète du transport vidéo | Formatage stable, analyse 0 problème, 71/71 tests réussis |
 
 ## 6. Travail réalisé pour le contrôle distant
 
@@ -353,13 +374,13 @@ Ajouts suivants validés :
 
 ## 7. Prochaines étapes vérifiables
 
-1. Publier ce lot WSS/appairage après application du patch et validation sur Windows.
-2. Ajouter la révocation et une rotation sûre des secrets/certificats depuis l’interface utilisateur.
-3. Définir puis valider la cérémonie de première association contre un attaquant LAN actif (CF-018).
-4. Chiffrer les corps de fichiers sans régression du transfert existant (CF-019).
-5. Implémenter les adaptateurs Windows de capture et d’entrée, puis annoncer uniquement leurs capacités réellement actives.
-6. Relier la machine d’état de contrôle déjà testée aux adaptateurs et aux écrans de contrôle.
-7. Tester le coffre, WSS et la reconnexion sur appareils Windows et Android physiques.
+1. Compiler ce lot dans la CI Windows/Android puis tester le flux vidéo sur un PC et un téléphone physiques.
+2. Ajouter le clavier, le texte, le défilement et les commandes pause/reprise à l’écran de contrôle.
+3. Mesurer FPS, latence, mémoire et taille JPEG, puis ajouter une qualité adaptative et une vraie gestion de contre-pression.
+4. Implémenter le sens Windows → Android avec MediaProjection et AccessibilityService, sans contourner le verrouillage.
+5. Ajouter la révocation et une rotation sûre des secrets/certificats depuis l’interface utilisateur.
+6. Définir puis valider la cérémonie de première association contre un attaquant LAN actif (CF-018).
+7. Chiffrer les corps de fichiers sans régression du transfert existant (CF-019).
 
 ## 8. Modèle pour les prochaines entrées
 

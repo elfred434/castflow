@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:castflow/core/models.dart';
 import 'package:castflow/network/castflow_client.dart';
 import 'package:castflow/network/castflow_server.dart';
+import 'package:castflow/remote/control_frame.dart';
 import 'package:castflow/remote/control_protocol.dart';
 import 'package:castflow/remote/transport_identity.dart';
 import 'package:castflow/remote/trusted_peer_store.dart';
@@ -67,6 +68,7 @@ Future<(CastFlowServer, Directory)> startServer({
   TransportIdentity? transportIdentity,
   TrustedPeerStore? trustedPeers,
   Future<void> Function(RemoteInputEvent event)? inputInjector,
+  Future<ControlFramePayload> Function(int width, int height)? frameProvider,
 }) async {
   final directory = await Directory.systemTemp.createTemp('castflow-server-');
   final server = CastFlowServer(
@@ -78,6 +80,7 @@ Future<(CastFlowServer, Directory)> startServer({
     transportIdentity: transportIdentity,
     trustedPeers: trustedPeers,
     inputInjector: inputInjector,
+    frameProvider: frameProvider,
   );
   await server.start(preferredHttpPort: 0, preferredWsPort: 0);
   return (server, directory);
@@ -419,6 +422,70 @@ void main() {
     expect(injected, hasLength(2));
     await client.stopControl();
     expect(client.activeControlSession, isNull);
+  });
+
+  test('transporte les images binaires seulement après approbation', () async {
+    const capabilities = ControlCapabilities(
+      values: {ControlCapability.screenCapture},
+      maxWidth: 1280,
+      maxHeight: 720,
+      maxFps: 15,
+    );
+    final requestedSizes = <(int, int)>[];
+    final tls = await TransportIdentityStore(IntegrationSecretStore())
+        .loadOrCreate(desktop.id);
+    final secureDesktop = DeviceInfo(
+      id: desktop.id,
+      name: desktop.name,
+      platform: desktop.platform,
+      kind: desktop.kind,
+      fingerprint: tls.fingerprint,
+    );
+    final (server, directory) = await startServer(
+      device: secureDesktop,
+      transportIdentity: tls,
+      controlCapabilities: capabilities,
+      frameProvider: (width, height) async {
+        requestedSizes.add((width, height));
+        return ControlFramePayload(
+          width: 640,
+          height: 360,
+          codec: ControlFrameCodec.jpeg,
+          bytes: Uint8List.fromList([0xff, 0xd8, 1, 2, 0xff, 0xd9]),
+        );
+      },
+    );
+    final client = CastFlowClient(mobile);
+    addTearDown(() async {
+      await client.dispose();
+      await server.dispose();
+      await directory.delete(recursive: true);
+    });
+
+    expect(await client.connect(remoteFor(server)), isTrue);
+    final incoming = server.controlRequests.first;
+    final firstFrame = client.controlFrames.first;
+    final requesting = client.requestControl(
+      requested: const {ControlCapability.screenCapture},
+      width: 960,
+      height: 540,
+      fps: 10,
+    );
+    final request = await incoming;
+    server.approveControl(
+      request.id,
+      granted: const {ControlCapability.screenCapture},
+    );
+    await requesting;
+    final frame = await firstFrame.timeout(const Duration(seconds: 2));
+
+    expect(frame.sessionId, request.id);
+    expect(frame.sequence, 0);
+    expect(frame.width, 640);
+    expect(frame.height, 360);
+    expect(frame.codec, ControlFrameCodec.jpeg);
+    expect(requestedSizes.first, (960, 540));
+    await client.stopControl();
   });
 
   test('mauvais PIN refusé puis bon PIN accepté', () async {

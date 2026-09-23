@@ -5,6 +5,7 @@ import 'dart:io';
 import '../core/constants.dart';
 import '../core/models.dart';
 import '../protocol/protocol.dart';
+import '../remote/control_frame.dart';
 import '../remote/control_protocol.dart';
 import '../remote/transport_identity.dart';
 import '../remote/trust_protocol.dart';
@@ -31,14 +32,18 @@ class CastFlowClient {
     values: {},
   );
   ActiveControlSession? _activeControlSession;
+  int _lastControlFrameSequence = -1;
   final Map<String, Completer<Envelope>> _pending = {};
   final StreamController<IncomingOffer> _offerController =
       StreamController<IncomingOffer>.broadcast();
   final StreamController<bool> _connectionController =
       StreamController<bool>.broadcast();
+  final StreamController<ControlVideoFrame> _controlFrameController =
+      StreamController<ControlVideoFrame>.broadcast();
 
   Stream<IncomingOffer> get offers => _offerController.stream;
   Stream<bool> get connectionChanges => _connectionController.stream;
+  Stream<ControlVideoFrame> get controlFrames => _controlFrameController.stream;
   bool get connected => _socket?.readyState == WebSocket.open;
   bool get authenticated => connected && _sessionToken.isNotEmpty;
   String get sessionToken => _sessionToken;
@@ -325,6 +330,7 @@ class CastFlowClient {
       state: ControlSessionState.active,
     );
     _activeControlSession = session;
+    _lastControlFrameSequence = -1;
     return session;
   }
 
@@ -380,6 +386,7 @@ class CastFlowClient {
       throw StateError('Arrêt du contrôle refusé');
     }
     _activeControlSession = null;
+    _lastControlFrameSequence = -1;
   }
 
   Future<Envelope> request(
@@ -401,6 +408,19 @@ class CastFlowClient {
   }
 
   void _handleMessage(Object? raw) {
+    if (raw is List<int>) {
+      try {
+        final frame = ControlVideoFrame.decode(raw);
+        if (frame.sessionId == _activeControlSession?.id &&
+            frame.sequence > _lastControlFrameSequence) {
+          _lastControlFrameSequence = frame.sequence;
+          _controlFrameController.add(frame);
+        }
+      } on FormatException {
+        // Ignorer une trame binaire invalide sans désynchroniser le canal JSON.
+      }
+      return;
+    }
     if (raw is! String) return;
     Envelope message;
     try {
@@ -415,6 +435,7 @@ class CastFlowClient {
     if (message.type == ControlMessageType.stop &&
         message.data['sessionId'] == _activeControlSession?.id) {
       _activeControlSession = null;
+      _lastControlFrameSequence = -1;
     }
     if (message.type == 'OFFER') {
       final rawFiles = message.data['files'];
@@ -439,6 +460,7 @@ class CastFlowClient {
     _secureSocketClient = null;
     _sessionToken = '';
     _activeControlSession = null;
+    _lastControlFrameSequence = -1;
     for (final completer in _pending.values) {
       if (!completer.isCompleted) {
         completer.completeError(StateError('Connexion interrompue'));
@@ -718,6 +740,7 @@ class CastFlowClient {
     await disconnect();
     await _offerController.close();
     await _connectionController.close();
+    await _controlFrameController.close();
   }
 }
 

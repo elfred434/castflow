@@ -6,6 +6,7 @@ import 'dart:math';
 import '../core/constants.dart';
 import '../core/models.dart';
 import '../protocol/protocol.dart';
+import '../remote/control_frame.dart';
 import '../remote/control_protocol.dart';
 import '../remote/control_session.dart';
 import '../remote/transport_identity.dart';
@@ -24,6 +25,7 @@ class CastFlowServer {
     this.transportIdentity,
     this.trustedPeers,
     this.inputInjector,
+    this.frameProvider,
   }) : _controlSessions = ControlSessionCoordinator(
          localDeviceId: device.id,
          localCapabilities: controlCapabilities,
@@ -37,6 +39,8 @@ class CastFlowServer {
   final TransportIdentity? transportIdentity;
   final TrustedPeerStore? trustedPeers;
   final Future<void> Function(RemoteInputEvent event)? inputInjector;
+  final Future<ControlFramePayload> Function(int maxWidth, int maxHeight)?
+  frameProvider;
   final ControlSessionCoordinator _controlSessions;
 
   bool get secureTransport => transportIdentity != null;
@@ -174,7 +178,7 @@ class CastFlowServer {
     _clients.clear();
     _pendingTrust.clear();
     for (final pending in _pendingControl.values) {
-      pending.expiryTimer?.cancel();
+      pending.cancelTimers();
     }
     _pendingControl.clear();
     _trustChallenges.clear();
@@ -579,7 +583,7 @@ class CastFlowServer {
           state == ControlSessionState.paused) {
         _controlSessions.stop(id, reason: 'Connexion interrompue');
       }
-      _pendingControl.remove(id)?.expiryTimer?.cancel();
+      _pendingControl.remove(id)?.cancelTimers();
     }
   }
 
@@ -712,10 +716,7 @@ class CastFlowServer {
 
   Future<void> _requestControl(_ClientSession client, Envelope message) async {
     final peer = client.device;
-    if (!secureTransport ||
-        !client.authenticated ||
-        peer == null ||
-        inputInjector == null) {
+    if (!secureTransport || !client.authenticated || peer == null) {
       _sendControlError(
         client,
         message,
@@ -726,6 +727,16 @@ class CastFlowServer {
     }
     try {
       final request = ControlRequest.fromJson(message.data);
+      final needsCapture = request.requested.contains(
+        ControlCapability.screenCapture,
+      );
+      final needsInput = request.requested.any(
+        (capability) => capability != ControlCapability.screenCapture,
+      );
+      if ((needsCapture && frameProvider == null) ||
+          (needsInput && inputInjector == null)) {
+        throw StateError('Adaptateur de contrôle demandé indisponible');
+      }
       final snapshot = _controlSessions.receiveRequest(
         requesterDeviceId: peer.id,
         request: request,
@@ -765,6 +776,72 @@ class CastFlowServer {
     }
   }
 
+  void _scheduleControlFrame(
+    _PendingControlRequest pending, {
+    Duration delay = Duration.zero,
+  }) {
+    pending.frameTimer?.cancel();
+    pending.frameTimer = Timer(
+      delay,
+      () => unawaited(_captureAndSendControlFrame(pending)),
+    );
+  }
+
+  Future<void> _captureAndSendControlFrame(
+    _PendingControlRequest pending,
+  ) async {
+    final sessionId = pending.request.id;
+    if (_pendingControl[sessionId] != pending) return;
+    final snapshot = _controlSessions.find(sessionId);
+    if (snapshot?.state == ControlSessionState.paused) {
+      _scheduleControlFrame(pending, delay: const Duration(milliseconds: 100));
+      return;
+    }
+    if (snapshot?.state != ControlSessionState.active ||
+        !snapshot!.granted.contains(ControlCapability.screenCapture)) {
+      return;
+    }
+    final provider = frameProvider;
+    if (provider == null) {
+      stopControlLocally(sessionId, reason: 'Capture d’écran indisponible');
+      return;
+    }
+    final stopwatch = Stopwatch()..start();
+    try {
+      final request = pending.request.request;
+      final payload = await provider(request.width, request.height);
+      payload.validate();
+      if (_pendingControl[sessionId] != pending ||
+          _controlSessions.find(sessionId)?.state !=
+              ControlSessionState.active) {
+        return;
+      }
+      pending.client.socket.add(
+        ControlVideoFrame(
+          sessionId: sessionId,
+          sequence: pending.frameSequence++,
+          capturedAt: DateTime.now().toUtc(),
+          width: payload.width,
+          height: payload.height,
+          codec: payload.codec,
+          bytes: payload.bytes,
+        ).encode(),
+      );
+    } on Object {
+      stopControlLocally(sessionId, reason: 'Capture d’écran interrompue');
+      return;
+    }
+    stopwatch.stop();
+    final interval = Duration(
+      microseconds:
+          Duration.microsecondsPerSecond ~/ pending.request.request.fps,
+    );
+    final delay = interval > stopwatch.elapsed
+        ? interval - stopwatch.elapsed
+        : Duration.zero;
+    _scheduleControlFrame(pending, delay: delay);
+  }
+
   void _expireControlRequest(String sessionId) {
     final pending = _pendingControl.remove(sessionId);
     if (pending == null ||
@@ -792,7 +869,7 @@ class CastFlowServer {
     if (pending == null) return;
     try {
       final snapshot = _controlSessions.approve(sessionId, granted: granted);
-      pending.expiryTimer?.cancel();
+      pending.cancelTimers();
       pending.controlToken = secureId('control');
       _sendToClient(
         pending.client,
@@ -808,6 +885,9 @@ class CastFlowServer {
           },
         ),
       );
+      if (snapshot.granted.contains(ControlCapability.screenCapture)) {
+        _scheduleControlFrame(pending);
+      }
     } on Object catch (error) {
       _sendToClient(
         pending.client,
@@ -829,7 +909,7 @@ class CastFlowServer {
   }) {
     final pending = _pendingControl.remove(sessionId);
     if (pending == null) return;
-    pending.expiryTimer?.cancel();
+    pending.cancelTimers();
     _controlSessions.deny(sessionId, reason: reason);
     _sendToClient(
       pending.client,
@@ -929,6 +1009,11 @@ class CastFlowServer {
       final snapshot = pause
           ? _controlSessions.pause(sessionId)
           : _controlSessions.resume(sessionId);
+      if (pause) {
+        pending.frameTimer?.cancel();
+      } else if (snapshot.granted.contains(ControlCapability.screenCapture)) {
+        _scheduleControlFrame(pending);
+      }
       _sendToClient(
         client,
         message.reply(ControlMessageType.ready, {
@@ -952,7 +1037,7 @@ class CastFlowServer {
   }) {
     final pending = _pendingControl.remove(sessionId);
     if (pending == null) return;
-    pending.expiryTimer?.cancel();
+    pending.cancelTimers();
     _controlSessions.stop(sessionId, reason: reason);
     _sendToClient(
       pending.client,
@@ -984,7 +1069,7 @@ class CastFlowServer {
         sessionId,
         reason: 'Arrêt demandé par le contrôleur',
       );
-      _pendingControl.remove(sessionId)?.expiryTimer?.cancel();
+      _pendingControl.remove(sessionId)?.cancelTimers();
       _sendToClient(
         client,
         message.reply(ControlMessageType.ready, {
@@ -1507,6 +1592,13 @@ class _PendingControlRequest {
   final String messageId;
   String controlToken = '';
   Timer? expiryTimer;
+  Timer? frameTimer;
+  int frameSequence = 0;
+
+  void cancelTimers() {
+    expiryTimer?.cancel();
+    frameTimer?.cancel();
+  }
 }
 
 class _ClientSession {

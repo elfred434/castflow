@@ -12,7 +12,10 @@ import '../network/castflow_client.dart';
 import '../network/castflow_server.dart';
 import '../network/discovery_service.dart';
 import '../protocol/protocol.dart';
+import '../remote/control_frame.dart';
+import '../remote/control_protocol.dart';
 import '../remote/transport_identity.dart';
+import '../remote/windows_control_backend.dart';
 import '../remote/trusted_peer_store.dart';
 import '../security/security.dart';
 import '../storage/settings_repository.dart';
@@ -33,6 +36,7 @@ class AppController extends ChangeNotifier {
   final SecretStore _secretStore;
   late final TrustedPeerStore _trustedPeers;
   TransportIdentity? transportIdentity;
+  WindowsControlBackend? windowsControlBackend;
   DeviceInfo? identity;
   CastFlowServer? server;
   CastFlowClient? client;
@@ -48,6 +52,8 @@ class AppController extends ChangeNotifier {
   int transferredBytes = 0;
   int totalTransferBytes = 0;
   IncomingOffer? incomingOffer;
+  ControlVideoFrame? latestControlFrame;
+  int _controlInputSequence = 0;
 
   final List<RemoteDevice> devices = [];
   final List<LocalFile> selectedFiles = [];
@@ -55,6 +61,7 @@ class AppController extends ChangeNotifier {
   final List<TransferSnapshot> pendingTransfers = [];
   final List<DeviceInfo> inboundPeers = [];
   final List<IncomingTrustRequest> pendingTrustRequests = [];
+  final List<IncomingControlRequest> pendingControlRequests = [];
   final List<StreamSubscription<Object?>> _subscriptions = [];
 
   bool get isDesktop =>
@@ -90,7 +97,23 @@ class AppController extends ChangeNotifier {
         kind: storedIdentity.kind,
         fingerprint: transportIdentity!.fingerprint,
       );
-      client = CastFlowClient(identity!, trustedPeers: _trustedPeers);
+      var localControlCapabilities = const ControlCapabilities(values: {});
+      if (Platform.isWindows) {
+        try {
+          final backend = WindowsControlBackend();
+          if (await backend.initialize()) {
+            windowsControlBackend = backend;
+            localControlCapabilities = backend.capabilities;
+          }
+        } on Object catch (exception) {
+          error = 'Contrôle Windows indisponible: $exception';
+        }
+      }
+      client = CastFlowClient(
+        identity!,
+        controlCapabilities: localControlCapabilities,
+        trustedPeers: _trustedPeers,
+      );
       _subscriptions.add(
         client!.connectionChanges.listen((connected) {
           if (!connected) connectedPeer = null;
@@ -103,6 +126,12 @@ class AppController extends ChangeNotifier {
           notifyListeners();
         }),
       );
+      _subscriptions.add(
+        client!.controlFrames.listen((frame) {
+          latestControlFrame = frame;
+          notifyListeners();
+        }),
+      );
 
       if (isDesktop) {
         downloadDirectory = await _resolveDownloadDirectory();
@@ -110,8 +139,11 @@ class AppController extends ChangeNotifier {
           device: identity!,
           downloadDirectory: downloadDirectory!,
           pin: pin,
+          controlCapabilities: localControlCapabilities,
           transportIdentity: transportIdentity,
           trustedPeers: _trustedPeers,
+          inputInjector: windowsControlBackend?.inject,
+          frameProvider: windowsControlBackend?.captureJpeg,
         );
         await server!.start();
         localAddress = await _primaryAddress();
@@ -135,6 +167,23 @@ class AppController extends ChangeNotifier {
             pendingTrustRequests.removeWhere((item) => item.id == request.id);
             pendingTrustRequests.add(request);
             notifyListeners();
+          }),
+        );
+        _subscriptions.add(
+          server!.controlRequests.listen((request) {
+            pendingControlRequests.removeWhere((item) => item.id == request.id);
+            pendingControlRequests.add(request);
+            notifyListeners();
+          }),
+        );
+        _subscriptions.add(
+          server!.controlSessionChanges.listen((session) {
+            if (session.state != ControlSessionState.awaitingLocalApproval) {
+              pendingControlRequests.removeWhere(
+                (item) => item.id == session.id,
+              );
+              notifyListeners();
+            }
           }),
         );
       }
@@ -292,11 +341,93 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void approveControl(String sessionId) {
+    final request = pendingControlRequests
+        .where((item) => item.id == sessionId)
+        .firstOrNull;
+    if (request == null) return;
+    server?.approveControl(sessionId, granted: request.request.requested);
+    pendingControlRequests.removeWhere((item) => item.id == sessionId);
+    notifyListeners();
+  }
+
+  void denyControl(String sessionId) {
+    server?.denyControl(sessionId);
+    pendingControlRequests.removeWhere((item) => item.id == sessionId);
+    notifyListeners();
+  }
+
+  void stopHostedControl(String sessionId) {
+    server?.stopControlLocally(sessionId);
+    notifyListeners();
+  }
+
+  Future<bool> startRemoteControl() async {
+    final activeClient = client;
+    if (activeClient == null || !activeClient.authenticated) return false;
+    final available = activeClient.remoteControlCapabilities.values;
+    if (!available.contains(ControlCapability.screenCapture)) {
+      error = 'Cet appareil ne propose pas de capture d’écran';
+      notifyListeners();
+      return false;
+    }
+    final requested = <ControlCapability>{ControlCapability.screenCapture};
+    for (final capability in const {
+      ControlCapability.pointer,
+      ControlCapability.keyboard,
+      ControlCapability.textInput,
+    }) {
+      if (available.contains(capability)) requested.add(capability);
+    }
+    try {
+      await activeClient.requestControl(requested: requested);
+      _controlInputSequence = 0;
+      latestControlFrame = null;
+      notifyListeners();
+      return true;
+    } on Object catch (exception) {
+      error = exception.toString();
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> sendPointer(
+    RemoteInputKind kind,
+    double x,
+    double y, {
+    int buttons = 0,
+  }) async {
+    final activeClient = client;
+    if (activeClient?.activeControlSession == null) return;
+    try {
+      await activeClient!.sendControlInput(
+        RemoteInputEvent(
+          kind: kind,
+          sequence: _controlInputSequence++,
+          x: x.clamp(0, 1),
+          y: y.clamp(0, 1),
+          buttons: buttons,
+        ),
+      );
+    } on Object catch (exception) {
+      error = exception.toString();
+      notifyListeners();
+    }
+  }
+
+  Future<void> stopRemoteControl() async {
+    await client?.stopControl();
+    latestControlFrame = null;
+    notifyListeners();
+  }
+
   Future<void> disconnect() async {
     await client?.disconnect();
     connectedPeer = null;
     waitingForPin = false;
     incomingOffer = null;
+    latestControlFrame = null;
     notifyListeners();
   }
 

@@ -43,6 +43,9 @@ jobs:
       - name: Tests unitaires, widgets et réseau
         run: flutter test --reporter expanded
 
+      - name: Compilation APK Android debug
+        run: flutter build apk --debug
+
   windows:
     name: Compilation Windows native
     runs-on: windows-latest

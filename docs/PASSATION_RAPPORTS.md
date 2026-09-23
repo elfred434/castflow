@@ -274,10 +274,17 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 
 - Statut : workflow ajouté; première exécution à valider.
 - Décision : un tag `v*` compile un APK Android release et un paquet Windows release portable, puis les joint à une GitHub Release marquée comme la plus récente.
-- Version initiale : `v0.2.0`, alignée sur `version: 0.2.0+2` du projet.
+- Première version à publier par ce workflow : `v0.2.1`, alignée sur `version: 0.2.1+3` du projet; `v0.2.0` était déjà occupé par un ancien tag.
 - Android : en l’absence de `android/key.properties`, le profil release utilise actuellement la clé debug conformément à la configuration Gradle existante. Cet APK convient aux essais privés mais une clé de signature release persistante reste nécessaire avant une distribution durable.
 - Windows : le ZIP doit contenir tout le répertoire `Release`, pas seulement le fichier `.exe`, afin de conserver les DLL et données Flutter indispensables.
 - Sécurité : aucune clé ni aucun secret de signature n’est ajouté au dépôt.
+
+### CF-030 — Tag `v0.2.0` antérieur découvert avant publication
+
+- Statut : contourné sans réécriture d’historique.
+- Résultat : le tag local et distant `v0.2.0` existait déjà et pointait sur `e1d6a5a`, bien qu’aucune GitHub Release ne soit publiée.
+- Décision : ne pas supprimer ni déplacer ce tag historique; utiliser `v0.2.1` et aligner la version applicative sur `0.2.1+3`.
+- Prévention : vérifier systématiquement les branches, les tags et les releases distantes avant de choisir une version.
 
 ## 4. Décisions d'architecture
 
@@ -343,6 +350,7 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-23 | Lot vidéo ciblé | 23/23 tests ciblés réussis |
 | 2026-09-23 | Validation complète du transport vidéo | Formatage stable, analyse 0 problème, 71/71 tests réussis |
 | 2026-09-23 | CI GitHub Actions `35872894698` sur `0b98993` | Analyse/tests Linux, APK Android debug et compilation Windows release réussis |
+| 2026-09-23 | CI GitHub Actions `35878210677` sur `636f467` | Fusion dans `main`, analyse/tests, APK Android debug et compilation Windows release réussis |
 
 ## 6. Travail réalisé pour le contrôle distant
 

@@ -10,11 +10,11 @@ permissions:
 
 jobs:
   android:
-    name: APK Android release
+    name: APK Android privé
     runs-on: ubuntu-latest
     steps:
       - name: Récupération du dépôt
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Installation de Flutter
         uses: subosito/flutter-action@v2
@@ -26,16 +26,16 @@ jobs:
       - name: Installation des dépendances
         run: flutter pub get
 
-      - name: Compilation APK release
-        run: flutter build apk --release
+      - name: Compilation APK privée
+        run: flutter build apk --debug
 
       - name: Préparation de l’APK
-        run: cp build/app/outputs/flutter-apk/app-release.apk "CastFlow-Android-${GITHUB_REF_NAME}.apk"
+        run: cp build/app/outputs/flutter-apk/app-debug.apk "CastFlow-Android-${GITHUB_REF_NAME}.apk"
 
       - name: Conservation de l’APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-release
+          name: android-private-apk
           path: CastFlow-Android-*.apk
           if-no-files-found: error
 
@@ -44,7 +44,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Récupération du dépôt
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Installation de Flutter
         uses: subosito/flutter-action@v2

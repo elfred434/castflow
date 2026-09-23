@@ -274,8 +274,8 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 
 - Statut : workflow ajouté; première exécution à valider.
 - Décision : un tag `v*` compile un APK Android release et un paquet Windows release portable, puis les joint à une GitHub Release marquée comme la plus récente.
-- Première version à publier par ce workflow : `v0.2.1`, alignée sur `version: 0.2.1+3` du projet; `v0.2.0` était déjà occupé par un ancien tag.
-- Android : en l’absence de `android/key.properties`, le profil release utilise actuellement la clé debug conformément à la configuration Gradle existante. Cet APK convient aux essais privés mais une clé de signature release persistante reste nécessaire avant une distribution durable.
+- Première version publiée par ce workflow : `v0.2.2`, alignée sur `version: 0.2.2+4` du projet; `v0.2.0` était déjà occupé et la tentative `v0.2.1` a échoué avant publication.
+- Android : le workflow publie explicitement l’APK debug signé destiné aux essais privés, déjà validé par la CI générale. Une clé de signature release persistante reste nécessaire avant une distribution durable.
 - Windows : le ZIP doit contenir tout le répertoire `Release`, pas seulement le fichier `.exe`, afin de conserver les DLL et données Flutter indispensables.
 - Sécurité : aucune clé ni aucun secret de signature n’est ajouté au dépôt.
 
@@ -285,6 +285,14 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Résultat : le tag local et distant `v0.2.0` existait déjà et pointait sur `e1d6a5a`, bien qu’aucune GitHub Release ne soit publiée.
 - Décision : ne pas supprimer ni déplacer ce tag historique; utiliser `v0.2.1` et aligner la version applicative sur `0.2.1+3`.
 - Prévention : vérifier systématiquement les branches, les tags et les releases distantes avant de choisir une version.
+
+### CF-031 — Échec de la première publication Android `v0.2.1`
+
+- Statut : correction appliquée, nouvelle publication à valider.
+- Résultat : l’exécution GitHub Actions `35880161068` a compilé et archivé le paquet Windows avec succès, mais `flutter build apk --release` a échoué; la publication finale a donc été correctement bloquée et aucune release partielle n’a été créée.
+- Limitation de diagnostic : les journaux détaillés du job exigent une authentification administrateur et n’étaient pas accessibles par l’API publique; la cause précise de l’échec release reste donc inconnue.
+- Correction sûre pour la distribution privée actuelle : compiler l’APK debug, voie déjà validée dans la CI générale, et le distinguer explicitement comme APK privé. Le tag correctif devient `v0.2.2`; le tag échoué `v0.2.1` n’est pas réécrit.
+- Maintenance : passage de `actions/checkout` de v4 à v6 dans le workflow de publication pour supprimer l’avertissement Node.js 20 observé.
 
 ## 4. Décisions d'architecture
 

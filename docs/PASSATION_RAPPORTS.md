@@ -205,6 +205,25 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Correction : nouvelle commande avec `$?` échappé ; `git am` et `git push` ont réussi.
 - Résultat vérifié : commit officiel `de251e9`, seuls les trois fichiers locaux du pont restent non suivis sur Windows.
 
+### CF-022 — SDK Flutter du sandbox supprimé à la restauration
+
+- Statut : contourné, récurrence possible.
+- Gravité : moyenne pour la validation locale.
+- Vérification : après une nouvelle restauration du sandbox sur l’ancien pointeur `3494b9e`, le répertoire Flutter sous `.cache` avait disparu ; les commandes `dart` et `flutter` ont échoué avec « command not found ».
+- Vérification Windows : `where flutter`, `where cmake` et `where cl` n’ont trouvé aucun outil dans le `PATH` du terminal contrôlé.
+- Correction : nouvelle récupération de l’archive officielle Flutter 3.47.0, SHA-256 `26cd99d3d94b1367e6b50535a18aeef0282c10a535bbe3ec493534dcdab75296` vérifié avant extraction.
+- Validation après restauration : Flutter 3.47.0 / Dart 3.13.0, analyse sans problème et 65/65 tests réussis.
+
+### CF-023 — Adaptateur Windows natif non encore compilé sur Windows
+
+- Statut : à vérifier par la CI Windows.
+- Gravité : haute avant annonce des capacités natives.
+- Travail réalisé : canal Flutter/C++ dédié, capture BGRA bornée du bureau virtuel avec GDI, et injection souris/clavier/texte avec `SendInput`.
+- Validation acquise : contrat Dart, dimensions et taille BGRA, rejet d’une trame tronquée et validation des entrées couverts par cinq tests réussis.
+- Validation manquante : le C++ n’a pas encore été compilé ni exécuté sur Windows, les outils Flutter/CMake/MSVC n’étant pas disponibles dans le `PATH` Windows contrôlé.
+- Mesure : ajout d’un job GitHub Actions `windows-latest` exécutant `flutter build windows --release`; aucune capacité native ne doit être annoncée avant réussite de ce job et intégration de la barrière de session.
+- Limites connues : GDI est un premier chemin de capture synchrone, pas encore le pipeline Windows Graphics Capture/Desktop Duplication prévu; `SendInput` reste soumis à UIPI et ne peut pas contrôler une application d’intégrité supérieure ni l’écran UAC.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle
@@ -256,6 +275,11 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-22 | Validation finale du lot local | Formatage stable, analyse 0 problème, 60/60 tests réussis |
 | 2026-09-22 | Patch WSS appliqué et poussé depuis Windows | Commit officiel `de251e9` |
 | 2026-09-22 | CI GitHub Actions `35796517545` | Réussie sur `de251e9` |
+| 2026-09-22 | CI GitHub Actions `35796652054` | Réussie sur `f3132e4` |
+| 2026-09-23 | Première tentative de validation de l’adaptateur Windows | Échec avant compilation : SDK Flutter du cache absent ; CF-022 |
+| 2026-09-23 | SDK Flutter 3.47.0 restauré | Archive officielle et SHA-256 vérifiés |
+| 2026-09-23 | Contrat Dart de l’adaptateur Windows | Analyse 0 problème, 5/5 tests ciblés puis 65/65 tests complets réussis |
+| 2026-09-23 | Compilation du C++ Windows | Non encore vérifiée ; job CI Windows ajouté |
 
 ## 6. Travail réalisé pour le contrôle distant
 

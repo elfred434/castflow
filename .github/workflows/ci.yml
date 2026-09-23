@@ -42,3 +42,23 @@ jobs:
 
       - name: Tests unitaires, widgets et réseau
         run: flutter test --reporter expanded
+
+  windows:
+    name: Compilation Windows native
+    runs-on: windows-latest
+    steps:
+      - name: Récupération du dépôt
+        uses: actions/checkout@v6
+
+      - name: Installation de Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Installation des dépendances
+        run: flutter pub get
+
+      - name: Compilation Windows release
+        run: flutter build windows --release

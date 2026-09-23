@@ -333,6 +333,7 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-23 | Paquet vidéo binaire et transport WSS | Analyse 0 problème, tests de format, JPEG et intégration réussis |
 | 2026-09-23 | Lot vidéo ciblé | 23/23 tests ciblés réussis |
 | 2026-09-23 | Validation complète du transport vidéo | Formatage stable, analyse 0 problème, 71/71 tests réussis |
+| 2026-09-23 | CI GitHub Actions `35872894698` sur `0b98993` | Analyse/tests Linux, APK Android debug et compilation Windows release réussis |
 
 ## 6. Travail réalisé pour le contrôle distant
 

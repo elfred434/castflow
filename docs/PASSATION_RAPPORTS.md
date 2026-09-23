@@ -207,12 +207,13 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 
 ### CF-022 — SDK Flutter du sandbox supprimé à la restauration
 
-- Statut : contourné, récurrence possible.
+- Statut : contourné, récurrence confirmée entre appels d’outils.
 - Gravité : moyenne pour la validation locale.
 - Vérification : après une nouvelle restauration du sandbox sur l’ancien pointeur `3494b9e`, le répertoire Flutter sous `.cache` avait disparu ; les commandes `dart` et `flutter` ont échoué avec « command not found ».
 - Vérification Windows : `where flutter`, `where cmake` et `where cl` n’ont trouvé aucun outil dans le `PATH` du terminal contrôlé.
 - Correction : nouvelle récupération de l’archive officielle Flutter 3.47.0, SHA-256 `26cd99d3d94b1367e6b50535a18aeef0282c10a535bbe3ec493534dcdab75296` vérifié avant extraction.
-- Validation après restauration : Flutter 3.47.0 / Dart 3.13.0, analyse sans problème et 65/65 tests réussis.
+- Récurrence vérifiée : le SDK a de nouveau disparu avant la validation du lot de barrière de session et a dû être téléchargé une troisième fois.
+- Validation après restauration : Flutter 3.47.0 / Dart 3.13.0, analyse sans problème et tests réussis.
 
 ### CF-023 — Adaptateur Windows natif
 
@@ -224,6 +225,24 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Validation manquante : capture et injection réelles sur le PC Windows physique, les outils Flutter/CMake/MSVC n’étant pas disponibles dans le `PATH` du terminal contrôlé.
 - Mesure : aucune capacité native n’est encore annoncée au réseau avant intégration de la barrière de session et du transport d’images.
 - Limites connues : GDI est un premier chemin de capture synchrone, pas encore le pipeline Windows Graphics Capture/Desktop Duplication prévu; `SendInput` reste soumis à UIPI et ne peut pas contrôler une application d’intégrité supérieure ni l’écran UAC.
+
+### CF-024 — Barrière réseau des sessions de contrôle
+
+- Statut : implémentée et validée au niveau protocole/réseau.
+- Gravité initiale : critique avant branchement de `SendInput`.
+- Correction : les messages de demande, approbation, refus, entrée, pause, reprise et arrêt sont reliés à `ControlSessionCoordinator` sur WSS.
+- Protections vérifiées : authentification préalable, transport WSS obligatoire, approbation locale, jeton de contrôle distinct, capacité accordée par type d’entrée, séquence anti-rejeu, session unique, blocage en pause, arrêt à la déconnexion et expiration d’une demande sans décision.
+- Reconnexion approuvée : un pair authentifié par preuve HMAC peut reprendre sans nouvelle confirmation locale uniquement pour les capacités déjà enregistrées dans son coffre de confiance.
+- Arrêt prioritaire : une API serveur locale peut arrêter la session et notifie le contrôleur.
+- Limite : cette barrière n’est pas encore reliée à l’interface de production ni au transport des images ; l’adaptateur Windows reste donc non annoncé par l’application.
+
+### CF-025 — Comparaison incorrecte d’objets dans le premier test de barrière
+
+- Statut : résolu.
+- Gravité : faible, test uniquement.
+- Résultat initial : le test d’intégration échouait alors que l’événement injecté avait les mêmes champs, car `RemoteInputEvent` ne redéfinit pas l’égalité d’objet.
+- Correction : comparaison des représentations `toJson()` plutôt que des identités d’instance.
+- Validation : les 13 tests d’intégration réussissent après correction.
 
 ## 4. Décisions d'architecture
 
@@ -282,6 +301,8 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-23 | Contrat Dart de l’adaptateur Windows | Analyse 0 problème, 5/5 tests ciblés puis 65/65 tests complets réussis |
 | 2026-09-23 | Première compilation du C++ Windows | Réussie en release dans la CI `35843047193` |
 | 2026-09-23 | CI Linux du lot adaptateur Windows | Formatage, analyse et 65/65 tests réussis |
+| 2026-09-23 | Première validation de la barrière de session | Analyse réussie, test en échec sur l’égalité d’instance ; CF-025 |
+| 2026-09-23 | Barrière réseau demande/approbation/entrée/pause/arrêt | Analyse 0 problème, 13/13 tests d’intégration puis 66/66 tests complets réussis |
 
 ## 6. Travail réalisé pour le contrôle distant
 

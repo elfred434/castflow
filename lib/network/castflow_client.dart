@@ -30,6 +30,7 @@ class CastFlowClient {
   ControlCapabilities _remoteControlCapabilities = const ControlCapabilities(
     values: {},
   );
+  ActiveControlSession? _activeControlSession;
   final Map<String, Completer<Envelope>> _pending = {};
   final StreamController<IncomingOffer> _offerController =
       StreamController<IncomingOffer>.broadcast();
@@ -43,6 +44,7 @@ class CastFlowClient {
   String get sessionToken => _sessionToken;
   ControlCapabilities get remoteControlCapabilities =>
       _remoteControlCapabilities;
+  ActiveControlSession? get activeControlSession => _activeControlSession;
 
   static Future<RemoteDevice?> probe(
     String host, {
@@ -266,6 +268,120 @@ class CastFlowClient {
     return _remoteControlCapabilities;
   }
 
+  Future<ActiveControlSession> requestControl({
+    required Set<ControlCapability> requested,
+    int width = 1280,
+    int height = 720,
+    int fps = 15,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final target = peer;
+    if (!authenticated || target == null) {
+      throw StateError('Authentification requise');
+    }
+    if (!target.secure) {
+      throw StateError('Le contrôle exige une connexion WSS');
+    }
+    if (requested.isEmpty ||
+        !remoteControlCapabilities.values.containsAll(requested)) {
+      throw StateError('Capacités de contrôle distantes insuffisantes');
+    }
+    final controlRequest = ControlRequest(
+      sessionId: secureId('ctrl'),
+      requested: requested,
+      width: width,
+      height: height,
+      fps: fps,
+    );
+    final response = await request(
+      Envelope(type: ControlMessageType.request, data: controlRequest.toJson()),
+      timeout: timeout,
+    );
+    if (response.type == ControlMessageType.deny) {
+      throw StateError(
+        response.data['reason']?.toString() ?? 'Contrôle refusé',
+      );
+    }
+    if (response.type != ControlMessageType.accept) {
+      throw StateError(
+        response.data['message']?.toString() ?? 'Réponse de contrôle invalide',
+      );
+    }
+    final sessionId = response.data['sessionId']?.toString() ?? '';
+    final token = response.data['controlToken']?.toString() ?? '';
+    final granted = ControlCapabilities.fromJson({
+      'values': response.data['granted'],
+    }).values;
+    if (sessionId != controlRequest.sessionId ||
+        token.isEmpty ||
+        granted.isEmpty ||
+        !requested.containsAll(granted)) {
+      throw StateError('Session de contrôle reçue invalide');
+    }
+    final session = ActiveControlSession(
+      id: sessionId,
+      controlToken: token,
+      granted: granted,
+      state: ControlSessionState.active,
+    );
+    _activeControlSession = session;
+    return session;
+  }
+
+  Future<void> sendControlInput(RemoteInputEvent event) async {
+    final session = _activeControlSession;
+    if (session == null || session.state != ControlSessionState.active) {
+      throw StateError('Aucune session de contrôle active');
+    }
+    final response = await request(
+      Envelope(
+        type: ControlMessageType.input,
+        data: {
+          'sessionId': session.id,
+          'controlToken': session.controlToken,
+          'event': event.toJson(),
+        },
+      ),
+    );
+    if (response.type != ControlMessageType.ready) {
+      throw StateError(
+        response.data['message']?.toString() ?? 'Entrée distante refusée',
+      );
+    }
+  }
+
+  Future<void> setControlPaused(bool paused) async {
+    final session = _activeControlSession;
+    if (session == null) throw StateError('Aucune session de contrôle');
+    final response = await request(
+      Envelope(
+        type: paused ? ControlMessageType.pause : ControlMessageType.resume,
+        data: {'sessionId': session.id, 'controlToken': session.controlToken},
+      ),
+    );
+    if (response.type != ControlMessageType.ready) {
+      throw StateError('Transition de contrôle refusée');
+    }
+    _activeControlSession = session.copyWith(
+      state: paused ? ControlSessionState.paused : ControlSessionState.active,
+    );
+  }
+
+  Future<void> stopControl() async {
+    final session = _activeControlSession;
+    if (session == null) return;
+    final response = await request(
+      Envelope(
+        type: ControlMessageType.stop,
+        data: {'sessionId': session.id, 'controlToken': session.controlToken},
+      ),
+    );
+    if (response.type != ControlMessageType.ready) {
+      throw StateError('Arrêt du contrôle refusé');
+    }
+    _activeControlSession = null;
+  }
+
   Future<Envelope> request(
     Envelope message, {
     Duration timeout = const Duration(seconds: 30),
@@ -296,6 +412,10 @@ class CastFlowClient {
     if (replyTo != null) {
       _pending[replyTo]?.complete(message);
     }
+    if (message.type == ControlMessageType.stop &&
+        message.data['sessionId'] == _activeControlSession?.id) {
+      _activeControlSession = null;
+    }
     if (message.type == 'OFFER') {
       final rawFiles = message.data['files'];
       if (rawFiles is List) {
@@ -318,6 +438,7 @@ class CastFlowClient {
     _secureSocketClient?.close(force: true);
     _secureSocketClient = null;
     _sessionToken = '';
+    _activeControlSession = null;
     for (final completer in _pending.values) {
       if (!completer.isCompleted) {
         completer.completeError(StateError('Connexion interrompue'));
@@ -598,6 +719,28 @@ class CastFlowClient {
     await _offerController.close();
     await _connectionController.close();
   }
+}
+
+class ActiveControlSession {
+  const ActiveControlSession({
+    required this.id,
+    required this.controlToken,
+    required this.granted,
+    required this.state,
+  });
+
+  final String id;
+  final String controlToken;
+  final Set<ControlCapability> granted;
+  final ControlSessionState state;
+
+  ActiveControlSession copyWith({ControlSessionState? state}) =>
+      ActiveControlSession(
+        id: id,
+        controlToken: controlToken,
+        granted: granted,
+        state: state ?? this.state,
+      );
 }
 
 ControlCapabilities _capabilitiesFrom(Object? raw) => raw is Map

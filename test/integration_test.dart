@@ -66,6 +66,7 @@ Future<(CastFlowServer, Directory)> startServer({
   DeviceInfo device = desktop,
   TransportIdentity? transportIdentity,
   TrustedPeerStore? trustedPeers,
+  Future<void> Function(RemoteInputEvent event)? inputInjector,
 }) async {
   final directory = await Directory.systemTemp.createTemp('castflow-server-');
   final server = CastFlowServer(
@@ -76,6 +77,7 @@ Future<(CastFlowServer, Directory)> startServer({
     controlCapabilities: controlCapabilities,
     transportIdentity: transportIdentity,
     trustedPeers: trustedPeers,
+    inputInjector: inputInjector,
   );
   await server.start(preferredHttpPort: 0, preferredWsPort: 0);
   return (server, directory);
@@ -205,6 +207,7 @@ void main() {
         transportIdentity: tls,
         trustedPeers: serverTrust,
         controlCapabilities: capabilities,
+        inputInjector: (_) async {},
       );
       final firstClient = CastFlowClient(
         mobile,
@@ -254,6 +257,11 @@ void main() {
       );
       expect(await reconnectingClient.connect(tamperedDiscovery), isTrue);
       expect(reconnectingClient.authenticated, isTrue);
+      final resumedControl = await reconnectingClient.requestControl(
+        requested: const {ControlCapability.pointer},
+      );
+      expect(resumedControl.granted, {ControlCapability.pointer});
+      await reconnectingClient.stopControl();
       await reconnectingClient.disconnect();
 
       final downgraded = RemoteDevice(
@@ -320,6 +328,97 @@ void main() {
     final refreshed = await client.refreshControlCapabilities();
     expect(refreshed.maxWidth, 1920);
     expect(refreshed.supports(ControlCapability.keyboard), isTrue);
+  });
+
+  test('barrière de session protège l’injection Windows', () async {
+    const capabilities = ControlCapabilities(
+      values: {
+        ControlCapability.pointer,
+        ControlCapability.keyboard,
+        ControlCapability.textInput,
+      },
+    );
+    final injected = <RemoteInputEvent>[];
+    final tls = await TransportIdentityStore(IntegrationSecretStore())
+        .loadOrCreate(desktop.id);
+    final secureDesktop = DeviceInfo(
+      id: desktop.id,
+      name: desktop.name,
+      platform: desktop.platform,
+      kind: desktop.kind,
+      fingerprint: tls.fingerprint,
+    );
+    final (server, directory) = await startServer(
+      device: secureDesktop,
+      transportIdentity: tls,
+      controlCapabilities: capabilities,
+      inputInjector: (event) async => injected.add(event),
+    );
+    final client = CastFlowClient(mobile);
+    addTearDown(() async {
+      await client.dispose();
+      await server.dispose();
+      await directory.delete(recursive: true);
+    });
+
+    expect(await client.connect(remoteFor(server)), isTrue);
+    final incoming = server.controlRequests.first;
+    final requesting = client.requestControl(
+      requested: const {ControlCapability.pointer, ControlCapability.keyboard},
+    );
+    final request = await incoming;
+    expect(request.device.id, mobile.id);
+    server.approveControl(
+      request.id,
+      granted: const {ControlCapability.pointer},
+    );
+    final session = await requesting;
+    expect(session.granted, {ControlCapability.pointer});
+    expect(session.controlToken, startsWith('control_'));
+
+    const pointer = RemoteInputEvent(
+      kind: RemoteInputKind.pointerMove,
+      sequence: 0,
+      x: 0.25,
+      y: 0.75,
+    );
+    await client.sendControlInput(pointer);
+    expect(injected.single.toJson(), pointer.toJson());
+    await expectLater(client.sendControlInput(pointer), throwsStateError);
+    expect(injected, hasLength(1));
+
+    const keyboard = RemoteInputEvent(
+      kind: RemoteInputKind.keyDown,
+      sequence: 1,
+      key: 'Enter',
+    );
+    await expectLater(client.sendControlInput(keyboard), throwsStateError);
+    expect(injected, hasLength(1));
+
+    await client.setControlPaused(true);
+    await expectLater(
+      client.sendControlInput(
+        const RemoteInputEvent(
+          kind: RemoteInputKind.pointerMove,
+          sequence: 1,
+          x: 0.5,
+          y: 0.5,
+        ),
+      ),
+      throwsStateError,
+    );
+    await client.setControlPaused(false);
+    await client.sendControlInput(
+      const RemoteInputEvent(
+        kind: RemoteInputKind.pointerMove,
+        sequence: 1,
+        x: 0.5,
+        y: 0.5,
+      ),
+    );
+    expect(injected, hasLength(2));
+    await client.stopControl();
+    expect(client.activeControlSession, isNull);
   });
 
   test('mauvais PIN refusé puis bon PIN accepté', () async {

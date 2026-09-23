@@ -12,6 +12,8 @@ import '../network/castflow_client.dart';
 import '../network/castflow_server.dart';
 import '../network/discovery_service.dart';
 import '../protocol/protocol.dart';
+import '../remote/transport_identity.dart';
+import '../remote/trusted_peer_store.dart';
 import '../security/security.dart';
 import '../storage/settings_repository.dart';
 
@@ -22,9 +24,15 @@ final appControllerProvider = ChangeNotifierProvider<AppController>((ref) {
 });
 
 class AppController extends ChangeNotifier {
-  AppController(this._settings);
+  AppController(this._settings, {SecretStore? secretStore})
+    : _secretStore = secretStore ?? const FlutterSecretStore() {
+    _trustedPeers = TrustedPeerStore(_secretStore);
+  }
 
   final SettingsRepository _settings;
+  final SecretStore _secretStore;
+  late final TrustedPeerStore _trustedPeers;
+  TransportIdentity? transportIdentity;
   DeviceInfo? identity;
   CastFlowServer? server;
   CastFlowClient? client;
@@ -46,6 +54,7 @@ class AppController extends ChangeNotifier {
   final List<TransferSnapshot> transferHistory = [];
   final List<TransferSnapshot> pendingTransfers = [];
   final List<DeviceInfo> inboundPeers = [];
+  final List<IncomingTrustRequest> pendingTrustRequests = [];
   final List<StreamSubscription<Object?>> _subscriptions = [];
 
   bool get isDesktop =>
@@ -65,13 +74,23 @@ class AppController extends ChangeNotifier {
       wsPort: activeServer.wsPort!,
       device: currentIdentity,
       pin: pin,
+      secure: activeServer.secureTransport,
     );
   }
 
   Future<void> initialize() async {
     try {
-      identity = await _settings.loadIdentity();
-      client = CastFlowClient(identity!);
+      final storedIdentity = await _settings.loadIdentity();
+      transportIdentity = await TransportIdentityStore(_secretStore)
+          .loadOrCreate(storedIdentity.id);
+      identity = DeviceInfo(
+        id: storedIdentity.id,
+        name: storedIdentity.name,
+        platform: storedIdentity.platform,
+        kind: storedIdentity.kind,
+        fingerprint: transportIdentity!.fingerprint,
+      );
+      client = CastFlowClient(identity!, trustedPeers: _trustedPeers);
       _subscriptions.add(
         client!.connectionChanges.listen((connected) {
           if (!connected) connectedPeer = null;
@@ -91,6 +110,8 @@ class AppController extends ChangeNotifier {
           device: identity!,
           downloadDirectory: downloadDirectory!,
           pin: pin,
+          transportIdentity: transportIdentity,
+          trustedPeers: _trustedPeers,
         );
         await server!.start();
         localAddress = await _primaryAddress();
@@ -109,6 +130,13 @@ class AppController extends ChangeNotifier {
             notifyListeners();
           }),
         );
+        _subscriptions.add(
+          server!.trustRequests.listen((request) {
+            pendingTrustRequests.removeWhere((item) => item.id == request.id);
+            pendingTrustRequests.add(request);
+            notifyListeners();
+          }),
+        );
       }
 
       discovery = DiscoveryService(
@@ -116,6 +144,7 @@ class AppController extends ChangeNotifier {
         httpPort: server?.httpPort ?? 0,
         wsPort: server?.wsPort ?? 0,
         requiresPin: isDesktop,
+        secure: server?.secureTransport ?? false,
         advertise: isDesktop,
       );
       _subscriptions.add(
@@ -229,6 +258,38 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+  }
+
+  Future<bool> requestPersistentTrust() async {
+    error = null;
+    try {
+      await client!.requestTrust();
+      notifyListeners();
+      return true;
+    } on Object catch (exception) {
+      error = exception.toString();
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> approveTrust(String requestId) async {
+    final request = pendingTrustRequests
+        .where((item) => item.id == requestId)
+        .firstOrNull;
+    if (request == null) return;
+    await server?.approveTrust(
+      requestId,
+      capabilities: request.requestedCapabilities,
+    );
+    pendingTrustRequests.removeWhere((item) => item.id == requestId);
+    notifyListeners();
+  }
+
+  void rejectTrust(String requestId) {
+    server?.rejectTrust(requestId);
+    pendingTrustRequests.removeWhere((item) => item.id == requestId);
+    notifyListeners();
   }
 
   Future<void> disconnect() async {

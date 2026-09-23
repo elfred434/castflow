@@ -43,6 +43,7 @@ void main() {
         wsPort: 53318,
         device: device,
         pin: '482913',
+        secure: true,
       );
       final parsed = parseConnectUrl(url)!;
       expect(parsed.host, '192.168.1.12');
@@ -51,6 +52,7 @@ void main() {
       expect(parsed.httpPort, 53317);
       expect(parsed.wsPort, 53318);
       expect(parsed.requiresPin, isTrue);
+      expect(parsed.secure, isTrue);
       expect(pinFromConnectUrl(url), '482913');
     });
 

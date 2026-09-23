@@ -11,6 +11,7 @@ class DiscoveryService {
     required this.httpPort,
     required this.wsPort,
     required this.requiresPin,
+    this.secure = false,
     this.port = CastFlowProtocol.discoveryPort,
     this.advertise = true,
   });
@@ -19,6 +20,7 @@ class DiscoveryService {
   final int httpPort;
   final int wsPort;
   final bool requiresPin;
+  final bool secure;
   final int port;
   final bool advertise;
 
@@ -65,7 +67,7 @@ class DiscoveryService {
     'device': device.toJson(),
     'http': httpPort,
     'ws': wsPort,
-    'secure': false,
+    'secure': secure,
     'requiresPin': requiresPin,
     't': DateTime.now().millisecondsSinceEpoch,
   };

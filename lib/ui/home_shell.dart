@@ -294,6 +294,36 @@ class _ReceiveCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (controller.pendingTrustRequests.isNotEmpty) ...[
+              ...controller.pendingTrustRequests.map(
+                (request) => Card(
+                  color: CastColors.cyan.withValues(alpha: .08),
+                  child: ListTile(
+                    title: Text(
+                      '${request.device.name} demande une approbation',
+                    ),
+                    subtitle: Text(
+                      '${request.requestedCapabilities.length} autorisation(s) de contrôle',
+                    ),
+                    trailing: Wrap(
+                      children: [
+                        IconButton(
+                          tooltip: 'Refuser',
+                          onPressed: () => controller.rejectTrust(request.id),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                        IconButton.filled(
+                          tooltip: 'Approuver',
+                          onPressed: () => controller.approveTrust(request.id),
+                          icon: const Icon(Icons.check_rounded),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             const _SectionTitle(
               icon: Icons.download_rounded,
               title: 'Recevoir sur cet ordinateur',
@@ -437,6 +467,29 @@ class _ConnectCardState extends State<_ConnectCard> {
                 ),
               ],
             ),
+            if (widget.controller.clientConnected &&
+                widget
+                    .controller
+                    .client!
+                    .remoteControlCapabilities
+                    .values
+                    .isNotEmpty) ...[
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          setState(() => _busy = true);
+                          await widget.controller.requestPersistentTrust();
+                          if (mounted) setState(() => _busy = false);
+                        },
+                  icon: const Icon(Icons.verified_user_outlined),
+                  label: const Text('Approuver les reconnexions futures'),
+                ),
+              ),
+            ],
             const SizedBox(height: 24),
             Row(
               children: [

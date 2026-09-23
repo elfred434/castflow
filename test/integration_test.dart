@@ -5,6 +5,9 @@ import 'dart:typed_data';
 import 'package:castflow/core/models.dart';
 import 'package:castflow/network/castflow_client.dart';
 import 'package:castflow/network/castflow_server.dart';
+import 'package:castflow/remote/control_protocol.dart';
+import 'package:castflow/remote/transport_identity.dart';
+import 'package:castflow/remote/trusted_peer_store.dart';
 import 'package:castflow/security/security.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -16,6 +19,22 @@ const desktop = DeviceInfo(
   fingerprint: 'desktop-fp',
 );
 
+class IntegrationSecretStore implements SecretStore {
+  final Map<String, String> values = {};
+
+  @override
+  Future<void> delete(String key) async => values.remove(key);
+
+  @override
+  Future<String?> read(String key) async => values[key];
+
+  @override
+  Future<Map<String, String>> readAll() async => Map.of(values);
+
+  @override
+  Future<void> write(String key, String value) async => values[key] = value;
+}
+
 const mobile = DeviceInfo(
   id: 'mobile-test',
   name: 'Pixel Test',
@@ -26,27 +45,37 @@ const mobile = DeviceInfo(
 
 RemoteDevice remoteFor(CastFlowServer server, {bool requiresPin = false}) =>
     RemoteDevice(
-      id: desktop.id,
-      name: desktop.name,
-      platform: desktop.platform,
-      kind: desktop.kind,
-      fingerprint: desktop.fingerprint,
+      id: server.device.id,
+      name: server.device.name,
+      platform: server.device.platform,
+      kind: server.device.kind,
+      fingerprint: server.device.fingerprint,
       host: '127.0.0.1',
       httpPort: server.httpPort!,
       wsPort: server.wsPort!,
       requiresPin: requiresPin,
+      secure: server.secureTransport,
     );
 
 Future<(CastFlowServer, Directory)> startServer({
   String? pin,
   bool autoAccept = true,
+  ControlCapabilities controlCapabilities = const ControlCapabilities(
+    values: {},
+  ),
+  DeviceInfo device = desktop,
+  TransportIdentity? transportIdentity,
+  TrustedPeerStore? trustedPeers,
 }) async {
   final directory = await Directory.systemTemp.createTemp('castflow-server-');
   final server = CastFlowServer(
-    device: desktop,
+    device: device,
     downloadDirectory: directory.path,
     pin: pin,
     autoAccept: autoAccept,
+    controlCapabilities: controlCapabilities,
+    transportIdentity: transportIdentity,
+    trustedPeers: trustedPeers,
   );
   await server.start(preferredHttpPort: 0, preferredWsPort: 0);
   return (server, directory);
@@ -82,6 +111,215 @@ void main() {
     expect(await client.connect(remoteFor(server)), isTrue);
     expect(client.authenticated, isTrue);
     expect(client.sessionToken, startsWith('session_'));
+  });
+
+  test('handshake WebSocket TLS avec empreinte épinglée', () async {
+    final tls = await TransportIdentityStore(IntegrationSecretStore())
+        .loadOrCreate(desktop.id);
+    final secureDesktop = DeviceInfo(
+      id: desktop.id,
+      name: desktop.name,
+      platform: desktop.platform,
+      kind: desktop.kind,
+      fingerprint: tls.fingerprint,
+    );
+    final (server, directory) = await startServer(
+      device: secureDesktop,
+      transportIdentity: tls,
+    );
+    final client = CastFlowClient(mobile);
+    addTearDown(() async {
+      await client.dispose();
+      await server.dispose();
+      await directory.delete(recursive: true);
+    });
+
+    final found = await CastFlowClient.probe(
+      '127.0.0.1',
+      port: server.httpPort!,
+    );
+    expect(found?.secure, isTrue);
+    expect(found?.fingerprint, tls.fingerprint);
+    expect(await client.connect(remoteFor(server)), isTrue);
+    expect(client.authenticated, isTrue);
+  });
+
+  test('refuse un serveur TLS dont l’empreinte est différente', () async {
+    final tls = await TransportIdentityStore(IntegrationSecretStore())
+        .loadOrCreate(desktop.id);
+    final secureDesktop = DeviceInfo(
+      id: desktop.id,
+      name: desktop.name,
+      platform: desktop.platform,
+      kind: desktop.kind,
+      fingerprint: tls.fingerprint,
+    );
+    final (server, directory) = await startServer(
+      device: secureDesktop,
+      transportIdentity: tls,
+    );
+    final client = CastFlowClient(mobile);
+    addTearDown(() async {
+      await client.dispose();
+      await server.dispose();
+      await directory.delete(recursive: true);
+    });
+    final target = remoteFor(server);
+    final forged = RemoteDevice(
+      id: target.id,
+      name: target.name,
+      platform: target.platform,
+      kind: target.kind,
+      fingerprint: List.filled(64, '0').join(),
+      host: target.host,
+      httpPort: target.httpPort,
+      wsPort: target.wsPort,
+      requiresPin: target.requiresPin,
+      secure: true,
+    );
+
+    await expectLater(client.connect(forged), throwsA(isA<Exception>()));
+    expect(client.authenticated, isFalse);
+  });
+
+  test(
+    'appaire explicitement puis reconnecte par preuve de confiance',
+    () async {
+      const capabilities = ControlCapabilities(
+        values: {ControlCapability.screenCapture, ControlCapability.pointer},
+      );
+      final tls = await TransportIdentityStore(IntegrationSecretStore())
+          .loadOrCreate(desktop.id);
+      final secureDesktop = DeviceInfo(
+        id: desktop.id,
+        name: desktop.name,
+        platform: desktop.platform,
+        kind: desktop.kind,
+        fingerprint: tls.fingerprint,
+      );
+      final serverTrust = TrustedPeerStore(IntegrationSecretStore());
+      final clientTrust = TrustedPeerStore(IntegrationSecretStore());
+      final (server, directory) = await startServer(
+        pin: '482913',
+        device: secureDesktop,
+        transportIdentity: tls,
+        trustedPeers: serverTrust,
+        controlCapabilities: capabilities,
+      );
+      final firstClient = CastFlowClient(
+        mobile,
+        controlCapabilities: capabilities,
+        trustedPeers: clientTrust,
+      );
+      CastFlowClient? reconnectingClient;
+      addTearDown(() async {
+        await reconnectingClient?.dispose();
+        await firstClient.dispose();
+        await server.dispose();
+        await directory.delete(recursive: true);
+      });
+
+      final target = remoteFor(server);
+      expect(await firstClient.connect(target, pin: '482913'), isTrue);
+      final incomingRequest = server.trustRequests.first;
+      final approval = firstClient.requestTrust();
+      final request = await incomingRequest;
+      expect(request.device.id, mobile.id);
+      await server.approveTrust(
+        request.id,
+        capabilities: request.requestedCapabilities,
+      );
+      final trusted = await approval;
+      expect(trusted.deviceId, desktop.id);
+      expect(await serverTrust.credential(mobile.id), isNotNull);
+      expect(await clientTrust.credential(desktop.id), isNotNull);
+
+      await firstClient.disconnect();
+      reconnectingClient = CastFlowClient(
+        mobile,
+        controlCapabilities: capabilities,
+        trustedPeers: clientTrust,
+      );
+      final tamperedDiscovery = RemoteDevice(
+        id: target.id,
+        name: target.name,
+        platform: target.platform,
+        kind: target.kind,
+        fingerprint: List.filled(64, '0').join(),
+        host: target.host,
+        httpPort: target.httpPort,
+        wsPort: target.wsPort,
+        requiresPin: true,
+        secure: true,
+      );
+      expect(await reconnectingClient.connect(tamperedDiscovery), isTrue);
+      expect(reconnectingClient.authenticated, isTrue);
+      await reconnectingClient.disconnect();
+
+      final downgraded = RemoteDevice(
+        id: target.id,
+        name: target.name,
+        platform: target.platform,
+        kind: target.kind,
+        fingerprint: target.fingerprint,
+        host: target.host,
+        httpPort: target.httpPort,
+        wsPort: target.wsPort,
+        requiresPin: true,
+        secure: false,
+      );
+      await expectLater(
+        reconnectingClient.connect(downgraded),
+        throwsA(isA<StateError>()),
+      );
+    },
+  );
+
+  test('négocie les capacités de contrôle dans les deux sens', () async {
+    const serverCapabilities = ControlCapabilities(
+      values: {
+        ControlCapability.screenCapture,
+        ControlCapability.pointer,
+        ControlCapability.keyboard,
+      },
+      maxWidth: 1920,
+      maxHeight: 1080,
+      maxFps: 30,
+    );
+    const clientCapabilities = ControlCapabilities(
+      values: {
+        ControlCapability.screenCapture,
+        ControlCapability.pointer,
+        ControlCapability.systemNavigation,
+      },
+      maxWidth: 1280,
+      maxHeight: 720,
+      maxFps: 15,
+    );
+    final (server, directory) = await startServer(
+      controlCapabilities: serverCapabilities,
+    );
+    final client = CastFlowClient(
+      mobile,
+      controlCapabilities: clientCapabilities,
+    );
+    addTearDown(() async {
+      await client.dispose();
+      await server.dispose();
+      await directory.delete(recursive: true);
+    });
+
+    expect(await client.connect(remoteFor(server)), isTrue);
+    expect(client.remoteControlCapabilities.values, serverCapabilities.values);
+    expect(client.remoteControlCapabilities.maxFps, 30);
+    expect(
+      server.controlCapabilitiesFor(mobile.id)?.values,
+      clientCapabilities.values,
+    );
+
+    final refreshed = await client.refreshControlCapabilities();
+    expect(refreshed.maxWidth, 1920);
+    expect(refreshed.supports(ControlCapability.keyboard), isTrue);
   });
 
   test('mauvais PIN refusé puis bon PIN accepté', () async {

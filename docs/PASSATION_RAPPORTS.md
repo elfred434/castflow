@@ -294,6 +294,14 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Correction sûre pour la distribution privée actuelle : compiler l’APK debug, voie déjà validée dans la CI générale, et le distinguer explicitement comme APK privé. Le tag correctif devient `v0.2.2`; le tag échoué `v0.2.1` n’est pas réécrit.
 - Maintenance : passage de `actions/checkout` de v4 à v6 dans le workflow de publication pour supprimer l’avertissement Node.js 20 observé.
 
+### CF-032 — Double workflow déclenché par le tag `v0.2.2`
+
+- Statut : release produite; déclenchement automatique redondant supprimé.
+- Résultat : l’ancien workflow `package.yml` s’est déclenché en parallèle du nouveau workflow. Ses tests et son installateur Windows ont réussi, mais son APK release a échoué comme lors de CF-031, donc son job global a échoué.
+- Correction : `package.yml` reste disponible manuellement pour le futur travail sur les installateurs, mais ne réagit plus automatiquement aux tags. `release.yml` devient l’unique chemin automatique de publication.
+- Validation : l’exécution `35882022280` a publié avec succès la GitHub Release `v0.2.2` avec les deux fichiers attendus.
+- Actifs vérifiés : APK Android de 186044221 octets, SHA-256 `006e12f852d396b2f73f3ed3a5e960dae7f21a21c28eca3c21d50346fee53e6b`; ZIP Windows de 13895046 octets, SHA-256 `90244722b9869b3684288271675f19d690525aec630cabd7e4d49225e8f7a42d`.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle
@@ -359,6 +367,8 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-23 | Validation complète du transport vidéo | Formatage stable, analyse 0 problème, 71/71 tests réussis |
 | 2026-09-23 | CI GitHub Actions `35872894698` sur `0b98993` | Analyse/tests Linux, APK Android debug et compilation Windows release réussis |
 | 2026-09-23 | CI GitHub Actions `35878210677` sur `636f467` | Fusion dans `main`, analyse/tests, APK Android debug et compilation Windows release réussis |
+| 2026-09-23 | CI GitHub Actions `35881110939` sur `54f30ca` | Branche unique `main`, analyse/tests, APK Android debug et compilation Windows release réussis |
+| 2026-09-23 | Publication GitHub Actions `35882022280` | Release `v0.2.2` publiée avec APK Android privé et ZIP Windows portable |
 
 ## 6. Travail réalisé pour le contrôle distant
 

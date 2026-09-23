@@ -6,7 +6,9 @@ import 'dart:math';
 import '../core/constants.dart';
 import '../core/models.dart';
 import '../protocol/protocol.dart';
+import '../remote/control_frame.dart';
 import '../remote/control_protocol.dart';
+import '../remote/control_session.dart';
 import '../remote/transport_identity.dart';
 import '../remote/trust_protocol.dart';
 import '../remote/trusted_peer_store.dart';
@@ -22,7 +24,12 @@ class CastFlowServer {
     this.controlCapabilities = const ControlCapabilities(values: {}),
     this.transportIdentity,
     this.trustedPeers,
-  });
+    this.inputInjector,
+    this.frameProvider,
+  }) : _controlSessions = ControlSessionCoordinator(
+         localDeviceId: device.id,
+         localCapabilities: controlCapabilities,
+       );
 
   final DeviceInfo device;
   String downloadDirectory;
@@ -31,6 +38,10 @@ class CastFlowServer {
   final ControlCapabilities controlCapabilities;
   final TransportIdentity? transportIdentity;
   final TrustedPeerStore? trustedPeers;
+  final Future<void> Function(RemoteInputEvent event)? inputInjector;
+  final Future<ControlFramePayload> Function(int maxWidth, int maxHeight)?
+  frameProvider;
+  final ControlSessionCoordinator _controlSessions;
 
   bool get secureTransport => transportIdentity != null;
 
@@ -45,6 +56,7 @@ class CastFlowServer {
   final Set<String> _reservedFinalPaths = {};
   final TrustChallengeRegistry _trustChallenges = TrustChallengeRegistry();
   final Map<String, _PendingTrustRequest> _pendingTrust = {};
+  final Map<String, _PendingControlRequest> _pendingControl = {};
 
   final StreamController<TransferSnapshot> _transferController =
       StreamController<TransferSnapshot>.broadcast();
@@ -54,12 +66,18 @@ class CastFlowServer {
       StreamController<DeviceInfo>.broadcast();
   final StreamController<IncomingTrustRequest> _trustRequestController =
       StreamController<IncomingTrustRequest>.broadcast();
+  final StreamController<IncomingControlRequest> _controlRequestController =
+      StreamController<IncomingControlRequest>.broadcast();
 
   Stream<TransferSnapshot> get transfers => _transferController.stream;
   Stream<TransferSnapshot> get incomingTransfers => _incomingController.stream;
   Stream<DeviceInfo> get connectedPeers => _peerController.stream;
   Stream<IncomingTrustRequest> get trustRequests =>
       _trustRequestController.stream;
+  Stream<IncomingControlRequest> get controlRequests =>
+      _controlRequestController.stream;
+  Stream<ControlSessionSnapshot> get controlSessionChanges =>
+      _controlSessions.changes;
 
   ControlCapabilities? controlCapabilitiesFor(String deviceId) {
     for (final client in _clients) {
@@ -159,6 +177,10 @@ class CastFlowServer {
     }
     _clients.clear();
     _pendingTrust.clear();
+    for (final pending in _pendingControl.values) {
+      pending.cancelTimers();
+    }
+    _pendingControl.clear();
     _trustChallenges.clear();
     await _wsServer?.close(force: true);
     await _httpServer?.close(force: true);
@@ -174,6 +196,8 @@ class CastFlowServer {
     await _incomingController.close();
     await _peerController.close();
     await _trustRequestController.close();
+    await _controlRequestController.close();
+    await _controlSessions.dispose();
   }
 
   Future<void> _handleHttpSafely(HttpRequest request) async {
@@ -548,6 +572,19 @@ class CastFlowServer {
   void _removeClient(_ClientSession client) {
     _clients.remove(client);
     _pendingTrust.removeWhere((_, pending) => pending.client == client);
+    final controlIds = _pendingControl.entries
+        .where((entry) => entry.value.client == client)
+        .map((entry) => entry.key)
+        .toList(growable: false);
+    for (final id in controlIds) {
+      final state = _controlSessions.find(id)?.state;
+      if (state == ControlSessionState.awaitingLocalApproval ||
+          state == ControlSessionState.active ||
+          state == ControlSessionState.paused) {
+        _controlSessions.stop(id, reason: 'Connexion interrompue');
+      }
+      _pendingControl.remove(id)?.cancelTimers();
+    }
   }
 
   Future<void> _handleMessage(_ClientSession client, Object? raw) async {
@@ -628,6 +665,16 @@ class CastFlowServer {
         await _authenticateTrusted(client, message);
       case ControlMessageType.trustRequest:
         _requestTrust(client, message);
+      case ControlMessageType.request:
+        await _requestControl(client, message);
+      case ControlMessageType.input:
+        await _handleControlInput(client, message);
+      case ControlMessageType.pause:
+        _changeControlState(client, message, pause: true);
+      case ControlMessageType.resume:
+        _changeControlState(client, message, pause: false);
+      case ControlMessageType.stop:
+        _stopControl(client, message);
       case ControlMessageType.capabilities:
         if (!client.authenticated) {
           _sendToClient(
@@ -667,6 +714,394 @@ class CastFlowServer {
     }
   }
 
+  Future<void> _requestControl(_ClientSession client, Envelope message) async {
+    final peer = client.device;
+    if (!secureTransport || !client.authenticated || peer == null) {
+      _sendControlError(
+        client,
+        message,
+        'CONTROL_UNAVAILABLE',
+        'Contrôle distant sécurisé indisponible',
+      );
+      return;
+    }
+    try {
+      final request = ControlRequest.fromJson(message.data);
+      final needsCapture = request.requested.contains(
+        ControlCapability.screenCapture,
+      );
+      final needsInput = request.requested.any(
+        (capability) => capability != ControlCapability.screenCapture,
+      );
+      if ((needsCapture && frameProvider == null) ||
+          (needsInput && inputInjector == null)) {
+        throw StateError('Adaptateur de contrôle demandé indisponible');
+      }
+      final snapshot = _controlSessions.receiveRequest(
+        requesterDeviceId: peer.id,
+        request: request,
+      );
+      final incoming = IncomingControlRequest(
+        id: snapshot.id,
+        device: peer,
+        request: request,
+        createdAt: snapshot.createdAt,
+      );
+      final pending = _PendingControlRequest(
+        request: incoming,
+        client: client,
+        messageId: message.id,
+      );
+      pending.expiryTimer = Timer(
+        controlApprovalTimeout,
+        () => _expireControlRequest(snapshot.id),
+      );
+      _pendingControl[snapshot.id] = pending;
+      if (client.trustedAuthenticated) {
+        final credential = await trustedPeers?.credential(peer.id);
+        if (credential != null &&
+            credential.peer.capabilities.containsAll(request.requested)) {
+          approveControl(snapshot.id, granted: request.requested);
+          return;
+        }
+      }
+      _controlRequestController.add(incoming);
+    } on Object catch (error) {
+      _sendControlError(
+        client,
+        message,
+        'CONTROL_REQUEST_INVALID',
+        error.toString(),
+      );
+    }
+  }
+
+  void _scheduleControlFrame(
+    _PendingControlRequest pending, {
+    Duration delay = Duration.zero,
+  }) {
+    pending.frameTimer?.cancel();
+    pending.frameTimer = Timer(
+      delay,
+      () => unawaited(_captureAndSendControlFrame(pending)),
+    );
+  }
+
+  Future<void> _captureAndSendControlFrame(
+    _PendingControlRequest pending,
+  ) async {
+    final sessionId = pending.request.id;
+    if (_pendingControl[sessionId] != pending) return;
+    final snapshot = _controlSessions.find(sessionId);
+    if (snapshot?.state == ControlSessionState.paused) {
+      _scheduleControlFrame(pending, delay: const Duration(milliseconds: 100));
+      return;
+    }
+    if (snapshot?.state != ControlSessionState.active ||
+        !snapshot!.granted.contains(ControlCapability.screenCapture)) {
+      return;
+    }
+    final provider = frameProvider;
+    if (provider == null) {
+      stopControlLocally(sessionId, reason: 'Capture d’écran indisponible');
+      return;
+    }
+    final stopwatch = Stopwatch()..start();
+    try {
+      final request = pending.request.request;
+      final payload = await provider(request.width, request.height);
+      payload.validate();
+      if (_pendingControl[sessionId] != pending ||
+          _controlSessions.find(sessionId)?.state !=
+              ControlSessionState.active) {
+        return;
+      }
+      pending.client.socket.add(
+        ControlVideoFrame(
+          sessionId: sessionId,
+          sequence: pending.frameSequence++,
+          capturedAt: DateTime.now().toUtc(),
+          width: payload.width,
+          height: payload.height,
+          codec: payload.codec,
+          bytes: payload.bytes,
+        ).encode(),
+      );
+    } on Object {
+      stopControlLocally(sessionId, reason: 'Capture d’écran interrompue');
+      return;
+    }
+    stopwatch.stop();
+    final interval = Duration(
+      microseconds:
+          Duration.microsecondsPerSecond ~/ pending.request.request.fps,
+    );
+    final delay = interval > stopwatch.elapsed
+        ? interval - stopwatch.elapsed
+        : Duration.zero;
+    _scheduleControlFrame(pending, delay: delay);
+  }
+
+  void _expireControlRequest(String sessionId) {
+    final pending = _pendingControl.remove(sessionId);
+    if (pending == null ||
+        _controlSessions.find(sessionId)?.state !=
+            ControlSessionState.awaitingLocalApproval) {
+      return;
+    }
+    const reason = 'Délai d’approbation expiré';
+    _controlSessions.deny(sessionId, reason: reason);
+    _sendToClient(
+      pending.client,
+      Envelope(
+        type: ControlMessageType.deny,
+        replyTo: pending.messageId,
+        data: {'sessionId': sessionId, 'reason': reason},
+      ),
+    );
+  }
+
+  void approveControl(
+    String sessionId, {
+    required Set<ControlCapability> granted,
+  }) {
+    final pending = _pendingControl[sessionId];
+    if (pending == null) return;
+    try {
+      final snapshot = _controlSessions.approve(sessionId, granted: granted);
+      pending.cancelTimers();
+      pending.controlToken = secureId('control');
+      _sendToClient(
+        pending.client,
+        Envelope(
+          type: ControlMessageType.accept,
+          replyTo: pending.messageId,
+          data: {
+            'sessionId': snapshot.id,
+            'granted': snapshot.granted
+                .map((capability) => capability.name)
+                .toList(growable: false),
+            'controlToken': pending.controlToken,
+          },
+        ),
+      );
+      if (snapshot.granted.contains(ControlCapability.screenCapture)) {
+        _scheduleControlFrame(pending);
+      }
+    } on Object catch (error) {
+      _sendToClient(
+        pending.client,
+        Envelope(
+          type: ControlMessageType.error,
+          replyTo: pending.messageId,
+          data: {
+            'code': 'CONTROL_APPROVAL_INVALID',
+            'message': error.toString(),
+          },
+        ),
+      );
+    }
+  }
+
+  void denyControl(
+    String sessionId, {
+    String reason = 'Demande refusée localement',
+  }) {
+    final pending = _pendingControl.remove(sessionId);
+    if (pending == null) return;
+    pending.cancelTimers();
+    _controlSessions.deny(sessionId, reason: reason);
+    _sendToClient(
+      pending.client,
+      Envelope(
+        type: ControlMessageType.deny,
+        replyTo: pending.messageId,
+        data: {'sessionId': sessionId, 'reason': reason},
+      ),
+    );
+  }
+
+  Future<void> _handleControlInput(
+    _ClientSession client,
+    Envelope message,
+  ) async {
+    final sessionId = message.data['sessionId']?.toString() ?? '';
+    final token = message.data['controlToken']?.toString() ?? '';
+    final rawEvent = message.data['event'];
+    final pending = _pendingControl[sessionId];
+    if (pending == null ||
+        pending.client != client ||
+        pending.controlToken.isEmpty ||
+        !constantTimeEquals(pending.controlToken, token) ||
+        rawEvent is! Map) {
+      _sendControlError(
+        client,
+        message,
+        'CONTROL_SESSION_INVALID',
+        'Session ou jeton de contrôle invalide',
+      );
+      return;
+    }
+    try {
+      final event = RemoteInputEvent.decode(rawEvent.cast<String, Object?>());
+      final snapshot = _controlSessions.find(sessionId);
+      if (snapshot == null || !_eventAllowed(event, snapshot.granted)) {
+        throw StateError('Capacité d’entrée non accordée');
+      }
+      if (!_controlSessions.acceptInputSequence(sessionId, event.sequence)) {
+        throw StateError('Événement rejoué ou désordonné');
+      }
+      await inputInjector!(event);
+      _sendToClient(
+        client,
+        message.reply(ControlMessageType.ready, {
+          'sessionId': sessionId,
+          'sequence': event.sequence,
+        }),
+      );
+    } on Object catch (error) {
+      _sendControlError(
+        client,
+        message,
+        'CONTROL_INPUT_REJECTED',
+        error.toString(),
+      );
+    }
+  }
+
+  bool _eventAllowed(RemoteInputEvent event, Set<ControlCapability> granted) =>
+      switch (event.kind) {
+        RemoteInputKind.pointerDown ||
+        RemoteInputKind.pointerMove ||
+        RemoteInputKind.pointerUp ||
+        RemoteInputKind.scroll => granted.contains(ControlCapability.pointer),
+        RemoteInputKind.keyDown ||
+        RemoteInputKind.keyUp => granted.contains(ControlCapability.keyboard),
+        RemoteInputKind.text => granted.contains(ControlCapability.textInput),
+        RemoteInputKind.back ||
+        RemoteInputKind.home ||
+        RemoteInputKind.recentApps => granted.contains(
+          ControlCapability.systemNavigation,
+        ),
+      };
+
+  void _changeControlState(
+    _ClientSession client,
+    Envelope message, {
+    required bool pause,
+  }) {
+    final sessionId = message.data['sessionId']?.toString() ?? '';
+    final token = message.data['controlToken']?.toString() ?? '';
+    final pending = _pendingControl[sessionId];
+    if (pending == null ||
+        pending.client != client ||
+        pending.controlToken.isEmpty ||
+        !constantTimeEquals(pending.controlToken, token)) {
+      _sendControlError(
+        client,
+        message,
+        'CONTROL_SESSION_INVALID',
+        'Session de contrôle invalide',
+      );
+      return;
+    }
+    try {
+      final snapshot = pause
+          ? _controlSessions.pause(sessionId)
+          : _controlSessions.resume(sessionId);
+      if (pause) {
+        pending.frameTimer?.cancel();
+      } else if (snapshot.granted.contains(ControlCapability.screenCapture)) {
+        _scheduleControlFrame(pending);
+      }
+      _sendToClient(
+        client,
+        message.reply(ControlMessageType.ready, {
+          'sessionId': sessionId,
+          'state': snapshot.state.name,
+        }),
+      );
+    } on Object catch (error) {
+      _sendControlError(
+        client,
+        message,
+        'CONTROL_STATE_INVALID',
+        error.toString(),
+      );
+    }
+  }
+
+  void stopControlLocally(
+    String sessionId, {
+    String reason = 'Session arrêtée localement',
+  }) {
+    final pending = _pendingControl.remove(sessionId);
+    if (pending == null) return;
+    pending.cancelTimers();
+    _controlSessions.stop(sessionId, reason: reason);
+    _sendToClient(
+      pending.client,
+      Envelope(
+        type: ControlMessageType.stop,
+        data: {'sessionId': sessionId, 'reason': reason},
+      ),
+    );
+  }
+
+  void _stopControl(_ClientSession client, Envelope message) {
+    final sessionId = message.data['sessionId']?.toString() ?? '';
+    final token = message.data['controlToken']?.toString() ?? '';
+    final pending = _pendingControl[sessionId];
+    if (pending == null ||
+        pending.client != client ||
+        pending.controlToken.isEmpty ||
+        !constantTimeEquals(pending.controlToken, token)) {
+      _sendControlError(
+        client,
+        message,
+        'CONTROL_SESSION_INVALID',
+        'Session de contrôle invalide',
+      );
+      return;
+    }
+    try {
+      final snapshot = _controlSessions.stop(
+        sessionId,
+        reason: 'Arrêt demandé par le contrôleur',
+      );
+      _pendingControl.remove(sessionId)?.cancelTimers();
+      _sendToClient(
+        client,
+        message.reply(ControlMessageType.ready, {
+          'sessionId': sessionId,
+          'state': snapshot.state.name,
+        }),
+      );
+    } on Object catch (error) {
+      _sendControlError(
+        client,
+        message,
+        'CONTROL_STATE_INVALID',
+        error.toString(),
+      );
+    }
+  }
+
+  void _sendControlError(
+    _ClientSession client,
+    Envelope request,
+    String code,
+    String message,
+  ) {
+    _sendToClient(
+      client,
+      request.reply(ControlMessageType.error, {
+        'code': code,
+        'message': message,
+      }),
+    );
+  }
+
   Future<void> _authenticateTrusted(
     _ClientSession client,
     Envelope message,
@@ -702,6 +1137,7 @@ class CastFlowServer {
       return;
     }
     client.authenticated = true;
+    client.trustedAuthenticated = true;
     client.sessionToken = secureId('session');
     await store!.updateLastSeen(peerDevice.id, DateTime.now());
     _sendToClient(
@@ -1130,6 +1566,41 @@ class _PendingTrustRequest {
   final _ClientSession client;
 }
 
+class IncomingControlRequest {
+  const IncomingControlRequest({
+    required this.id,
+    required this.device,
+    required this.request,
+    required this.createdAt,
+  });
+
+  final String id;
+  final DeviceInfo device;
+  final ControlRequest request;
+  final DateTime createdAt;
+}
+
+class _PendingControlRequest {
+  _PendingControlRequest({
+    required this.request,
+    required this.client,
+    required this.messageId,
+  });
+
+  final IncomingControlRequest request;
+  final _ClientSession client;
+  final String messageId;
+  String controlToken = '';
+  Timer? expiryTimer;
+  Timer? frameTimer;
+  int frameSequence = 0;
+
+  void cancelTimers() {
+    expiryTimer?.cancel();
+    frameTimer?.cancel();
+  }
+}
+
 class _ClientSession {
   _ClientSession({required this.socket, required this.address})
     : nonce = secureId('nonce');
@@ -1142,6 +1613,7 @@ class _ClientSession {
     values: {},
   );
   bool authenticated = false;
+  bool trustedAuthenticated = false;
   String sessionToken = '';
 }
 

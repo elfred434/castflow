@@ -2,7 +2,7 @@
 
 Ce document est le journal permanent du projet. Tout bug, incident, limitation, résultat de test, décision importante et vérification impossible doit y être ajouté.
 
-Dernière mise à jour : 22 septembre 2026.
+Dernière mise à jour : 23 septembre 2026.
 
 ## 1. État courant
 
@@ -13,8 +13,8 @@ Dernière mise à jour : 22 septembre 2026.
 - Nouvelle cible : contrôle distant bidirectionnel Windows ↔ Android sur réseau local.
 - Distribution Android retenue : APK privée.
 - Mode de reconnexion retenu : session approuvée persistante dans les limites imposées par Android.
-- Dernier commit officiel vérifié : `de251e9 feat(security): sécuriser le canal et la reconnexion`.
-- CI GitHub Actions du commit : exécution `35796517545` terminée avec succès.
+- Dernier commit officiel vérifié : `923869f feat(remote): protéger les entrées par session approuvée`.
+- CI GitHub Actions du commit : exécution `35870246103`, analyse/tests Linux et compilation Windows release réussis.
 
 ## 2. Règles applicables
 
@@ -205,6 +205,80 @@ Les règles obligatoires sont définies dans `docs/REGLES_DE_TRAVAIL.md` :
 - Correction : nouvelle commande avec `$?` échappé ; `git am` et `git push` ont réussi.
 - Résultat vérifié : commit officiel `de251e9`, seuls les trois fichiers locaux du pont restent non suivis sur Windows.
 
+### CF-022 — SDK Flutter du sandbox supprimé à la restauration
+
+- Statut : contourné, récurrence confirmée entre appels d’outils.
+- Gravité : moyenne pour la validation locale.
+- Vérification : après une nouvelle restauration du sandbox sur l’ancien pointeur `3494b9e`, le répertoire Flutter sous `.cache` avait disparu ; les commandes `dart` et `flutter` ont échoué avec « command not found ».
+- Vérification Windows : `where flutter`, `where cmake` et `where cl` n’ont trouvé aucun outil dans le `PATH` du terminal contrôlé.
+- Correction : nouvelle récupération de l’archive officielle Flutter 3.47.0, SHA-256 `26cd99d3d94b1367e6b50535a18aeef0282c10a535bbe3ec493534dcdab75296` vérifié avant extraction.
+- Récurrence vérifiée : le SDK a de nouveau disparu avant la validation du lot de barrière de session et a dû être téléchargé une troisième fois.
+- Validation après restauration : Flutter 3.47.0 / Dart 3.13.0, analyse sans problème et tests réussis.
+
+### CF-023 — Adaptateur Windows natif
+
+- Statut : compilation vérifiée ; exécution physique à vérifier.
+- Gravité restante : haute avant activation de bout en bout.
+- Travail réalisé : canal Flutter/C++ dédié, capture BGRA bornée du bureau virtuel avec GDI, et injection souris/clavier/texte avec `SendInput`.
+- Validation Dart : contrat, dimensions et taille BGRA, rejet d’une trame tronquée et validation des entrées couverts par cinq tests réussis.
+- Validation Windows : le job GitHub Actions `windows-latest` a exécuté `flutter build windows --release` avec succès dans l’exécution `35843047193`.
+- Validation manquante : capture et injection réelles sur le PC Windows physique, les outils Flutter/CMake/MSVC n’étant pas disponibles dans le `PATH` du terminal contrôlé.
+- Mesure : aucune capacité native n’est encore annoncée au réseau avant intégration de la barrière de session et du transport d’images.
+- Limites connues : GDI est un premier chemin de capture synchrone, pas encore le pipeline Windows Graphics Capture/Desktop Duplication prévu; `SendInput` reste soumis à UIPI et ne peut pas contrôler une application d’intégrité supérieure ni l’écran UAC.
+
+### CF-024 — Barrière réseau des sessions de contrôle
+
+- Statut : implémentée et validée au niveau protocole/réseau.
+- Gravité initiale : critique avant branchement de `SendInput`.
+- Correction : les messages de demande, approbation, refus, entrée, pause, reprise et arrêt sont reliés à `ControlSessionCoordinator` sur WSS.
+- Protections vérifiées : authentification préalable, transport WSS obligatoire, approbation locale, jeton de contrôle distinct, capacité accordée par type d’entrée, séquence anti-rejeu, session unique, blocage en pause, arrêt à la déconnexion et expiration d’une demande sans décision.
+- Reconnexion approuvée : un pair authentifié par preuve HMAC peut reprendre sans nouvelle confirmation locale uniquement pour les capacités déjà enregistrées dans son coffre de confiance.
+- Arrêt prioritaire : une API serveur locale peut arrêter la session et notifie le contrôleur.
+- Limite : cette barrière n’est pas encore reliée à l’interface de production ni au transport des images ; l’adaptateur Windows reste donc non annoncé par l’application.
+
+### CF-025 — Comparaison incorrecte d’objets dans le premier test de barrière
+
+- Statut : résolu.
+- Gravité : faible, test uniquement.
+- Résultat initial : le test d’intégration échouait alors que l’événement injecté avait les mêmes champs, car `RemoteInputEvent` ne redéfinit pas l’égalité d’objet.
+- Correction : comparaison des représentations `toJson()` plutôt que des identités d’instance.
+- Validation : les 13 tests d’intégration réussissent après correction.
+
+### CF-026 — Identité Git locale perdue avant le commit de barrière
+
+- Statut : résolu.
+- Gravité : faible, sans perte de code.
+- Résultat : la première tentative de commit a échoué avec `Author identity unknown` et `empty ident name` après une nouvelle restauration du sandbox.
+- Correction : rétablissement de `user.name` et `user.email` dans la configuration locale du dépôt, puis commit réussi.
+- Prévention : vérifier aussi l’identité Git locale après chaque resynchronisation, en plus du remote et du HEAD.
+
+### CF-027 — Transport vidéo Windows vers contrôleur
+
+- Statut : implémenté en MVP, validation physique requise.
+- Gravité initiale : bloquante pour le contrôle visuel Android → Windows.
+- Correction : format binaire versionné et borné, trames JPEG sur le WebSocket WSS épinglé, séquence vidéo anti-désordre, capture uniquement pendant une session active approuvée, cadence bornée par la demande, suspension en pause et arrêt immédiat avec la session.
+- Production : le backend Windows convertit les pixels BGRA natifs en JPEG qualité 70 hors du thread principal; l’application n’annonce les capacités Windows qu’après initialisation réussie du canal natif. Un échec du backend désactive seulement le contrôle et ne bloque pas le serveur de transfert de fichiers.
+- Interface : ajout d’un écran de contrôle affichant le dernier JPEG et traduisant les gestes tactiles en coordonnées normalisées, avec limitation des déplacements à environ 60 événements/s.
+- Validation acquise : sérialisation/rejet du paquet binaire, encodage BGRA→JPEG et transport WSS après approbation testés.
+- Limites : exécution réelle Windows/Android non encore vérifiée; création répétée de travaux `Isolate.run` et JPEG logiciel à mesurer; clavier distant et adaptation dynamique de qualité non encore exposés dans l’interface.
+
+### CF-028 — Fragment de texte accidentel pendant l’édition du contrôleur
+
+- Statut : résolu avant validation et commit.
+- Gravité : faible.
+- Résultat : un remplacement a inséré temporairement un fragment explicatif dans la signature de `disconnect`, rendant le fichier Dart invalide.
+- Correction : suppression immédiate du fragment avant formatage, analyse ou publication.
+- Prévention : relire la zone modifiée après tout remplacement contenant une longue chaîne générée.
+
+### CF-029 — Publication automatique des exécutables
+
+- Statut : workflow ajouté; première exécution à valider.
+- Décision : un tag `v*` compile un APK Android release et un paquet Windows release portable, puis les joint à une GitHub Release marquée comme la plus récente.
+- Version initiale : `v0.2.0`, alignée sur `version: 0.2.0+2` du projet.
+- Android : en l’absence de `android/key.properties`, le profil release utilise actuellement la clé debug conformément à la configuration Gradle existante. Cet APK convient aux essais privés mais une clé de signature release persistante reste nécessaire avant une distribution durable.
+- Windows : le ZIP doit contenir tout le répertoire `Release`, pas seulement le fichier `.exe`, afin de conserver les DLL et données Flutter indispensables.
+- Sécurité : aucune clé ni aucun secret de signature n’est ajouté au dépôt.
+
 ## 4. Décisions d'architecture
 
 ### DA-001 — Séparation transfert et contrôle
@@ -256,6 +330,19 @@ Le premier MVP vise au maximum 1280×720 et 15 images/s en JPEG adaptatif. Cette
 | 2026-09-22 | Validation finale du lot local | Formatage stable, analyse 0 problème, 60/60 tests réussis |
 | 2026-09-22 | Patch WSS appliqué et poussé depuis Windows | Commit officiel `de251e9` |
 | 2026-09-22 | CI GitHub Actions `35796517545` | Réussie sur `de251e9` |
+| 2026-09-22 | CI GitHub Actions `35796652054` | Réussie sur `f3132e4` |
+| 2026-09-23 | Première tentative de validation de l’adaptateur Windows | Échec avant compilation : SDK Flutter du cache absent ; CF-022 |
+| 2026-09-23 | SDK Flutter 3.47.0 restauré | Archive officielle et SHA-256 vérifiés |
+| 2026-09-23 | Contrat Dart de l’adaptateur Windows | Analyse 0 problème, 5/5 tests ciblés puis 65/65 tests complets réussis |
+| 2026-09-23 | Première compilation du C++ Windows | Réussie en release dans la CI `35843047193` |
+| 2026-09-23 | CI Linux du lot adaptateur Windows | Formatage, analyse et 65/65 tests réussis |
+| 2026-09-23 | Première validation de la barrière de session | Analyse réussie, test en échec sur l’égalité d’instance ; CF-025 |
+| 2026-09-23 | Barrière réseau demande/approbation/entrée/pause/arrêt | Analyse 0 problème, 13/13 tests d’intégration puis 66/66 tests complets réussis |
+| 2026-09-23 | CI GitHub Actions `35870246103` | Analyse/tests Linux et compilation Windows release réussis sur `923869f` |
+| 2026-09-23 | Paquet vidéo binaire et transport WSS | Analyse 0 problème, tests de format, JPEG et intégration réussis |
+| 2026-09-23 | Lot vidéo ciblé | 23/23 tests ciblés réussis |
+| 2026-09-23 | Validation complète du transport vidéo | Formatage stable, analyse 0 problème, 71/71 tests réussis |
+| 2026-09-23 | CI GitHub Actions `35872894698` sur `0b98993` | Analyse/tests Linux, APK Android debug et compilation Windows release réussis |
 
 ## 6. Travail réalisé pour le contrôle distant
 
@@ -297,13 +384,13 @@ Ajouts suivants validés :
 
 ## 7. Prochaines étapes vérifiables
 
-1. Publier ce lot WSS/appairage après application du patch et validation sur Windows.
-2. Ajouter la révocation et une rotation sûre des secrets/certificats depuis l’interface utilisateur.
-3. Définir puis valider la cérémonie de première association contre un attaquant LAN actif (CF-018).
-4. Chiffrer les corps de fichiers sans régression du transfert existant (CF-019).
-5. Implémenter les adaptateurs Windows de capture et d’entrée, puis annoncer uniquement leurs capacités réellement actives.
-6. Relier la machine d’état de contrôle déjà testée aux adaptateurs et aux écrans de contrôle.
-7. Tester le coffre, WSS et la reconnexion sur appareils Windows et Android physiques.
+1. Compiler ce lot dans la CI Windows/Android puis tester le flux vidéo sur un PC et un téléphone physiques.
+2. Ajouter le clavier, le texte, le défilement et les commandes pause/reprise à l’écran de contrôle.
+3. Mesurer FPS, latence, mémoire et taille JPEG, puis ajouter une qualité adaptative et une vraie gestion de contre-pression.
+4. Implémenter le sens Windows → Android avec MediaProjection et AccessibilityService, sans contourner le verrouillage.
+5. Ajouter la révocation et une rotation sûre des secrets/certificats depuis l’interface utilisateur.
+6. Définir puis valider la cérémonie de première association contre un attaquant LAN actif (CF-018).
+7. Chiffrer les corps de fichiers sans régression du transfert existant (CF-019).
 
 ## 8. Modèle pour les prochaines entrées
 

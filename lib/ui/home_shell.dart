@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../app/app_controller.dart';
 import '../core/models.dart';
+import '../remote/control_protocol.dart';
 import 'theme.dart';
 
 class HomeShell extends ConsumerStatefulWidget {
@@ -30,6 +32,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     final desktopLayout = width >= 820;
     final pages = <Widget>[
       _ConnectPage(controller: controller),
+      _RemoteControlPage(controller: controller),
       _TransferPage(controller: controller),
       _HistoryPage(controller: controller),
     ];
@@ -71,6 +74,10 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                   label: 'Connexion',
                 ),
                 NavigationDestination(
+                  icon: Icon(Icons.desktop_windows_rounded),
+                  label: 'Contrôle',
+                ),
+                NavigationDestination(
                   icon: Icon(Icons.swap_vert_circle_outlined),
                   label: 'Transferts',
                 ),
@@ -105,6 +112,10 @@ class _DesktopNavigation extends StatelessWidget {
         NavigationRailDestination(
           icon: Icon(Icons.link_rounded),
           label: Text('Connexion'),
+        ),
+        NavigationRailDestination(
+          icon: Icon(Icons.desktop_windows_rounded),
+          label: Text('Contrôle'),
         ),
         NavigationRailDestination(
           icon: Icon(Icons.swap_horiz_rounded),
@@ -316,6 +327,37 @@ class _ReceiveCard extends StatelessWidget {
                           tooltip: 'Approuver',
                           onPressed: () => controller.approveTrust(request.id),
                           icon: const Icon(Icons.check_rounded),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (controller.pendingControlRequests.isNotEmpty) ...[
+              ...controller.pendingControlRequests.map(
+                (request) => Card(
+                  color: CastColors.blue.withValues(alpha: .10),
+                  child: ListTile(
+                    title: Text('${request.device.name} veut contrôler ce PC'),
+                    subtitle: Text(
+                      request.request.requested
+                          .map((capability) => capability.name)
+                          .join(', '),
+                    ),
+                    trailing: Wrap(
+                      children: [
+                        IconButton(
+                          tooltip: 'Refuser le contrôle',
+                          onPressed: () => controller.denyControl(request.id),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                        IconButton.filled(
+                          tooltip: 'Autoriser le contrôle',
+                          onPressed: () =>
+                              controller.approveControl(request.id),
+                          icon: const Icon(Icons.screen_share_rounded),
                         ),
                       ],
                     ),
@@ -540,6 +582,170 @@ class _ConnectCardState extends State<_ConnectCard> {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RemoteControlPage extends StatefulWidget {
+  const _RemoteControlPage({required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<_RemoteControlPage> createState() => _RemoteControlPageState();
+}
+
+class _RemoteControlPageState extends State<_RemoteControlPage> {
+  bool _starting = false;
+  Offset _lastPointer = Offset.zero;
+  DateTime _lastMoveAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<void> _start() async {
+    setState(() => _starting = true);
+    await widget.controller.startRemoteControl();
+    if (mounted) setState(() => _starting = false);
+  }
+
+  (double, double) _normalized(Offset position, Size size) => (
+    (position.dx / size.width).clamp(0, 1),
+    (position.dy / size.height).clamp(0, 1),
+  );
+
+  void _sendPointer(
+    RemoteInputKind kind,
+    Offset position,
+    Size size, {
+    required int buttons,
+  }) {
+    final point = _normalized(position, size);
+    unawaited(
+      widget.controller.sendPointer(kind, point.$1, point.$2, buttons: buttons),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final frame = controller.latestControlFrame;
+    final activeSession = controller.client?.activeControlSession;
+    final active = activeSession != null;
+    final canPointer =
+        activeSession?.granted.contains(ControlCapability.pointer) == true;
+    final canStart =
+        controller.clientConnected &&
+        controller.client!.remoteControlCapabilities.supports(
+          ControlCapability.screenCapture,
+        );
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: _SectionTitle(
+                      icon: Icons.desktop_windows_rounded,
+                      title: 'Contrôle distant',
+                      subtitle: 'Flux chiffré sur le réseau local.',
+                    ),
+                  ),
+                  if (active)
+                    FilledButton.tonalIcon(
+                      onPressed: controller.stopRemoteControl,
+                      icon: const Icon(Icons.stop_circle_outlined),
+                      label: const Text('Arrêter'),
+                    )
+                  else
+                    FilledButton.icon(
+                      onPressed: canStart && !_starting ? _start : null,
+                      icon: _starting
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.play_arrow_rounded),
+                      label: const Text('Démarrer'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: frame == null
+                    ? _EmptyState(
+                        icon: active
+                            ? Icons.hourglass_top_rounded
+                            : Icons.desktop_access_disabled_rounded,
+                        text: active
+                            ? 'En attente de la première image…'
+                            : canStart
+                            ? 'Démarrez une session pour afficher l’écran distant.'
+                            : 'Connectez un appareil proposant la capture d’écran.',
+                      )
+                    : Center(
+                        child: AspectRatio(
+                          aspectRatio: frame.width / frame.height,
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final size = constraints.biggest;
+                              return GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onPanStart: canPointer
+                                    ? (details) {
+                                        _lastPointer = details.localPosition;
+                                        _sendPointer(
+                                          RemoteInputKind.pointerDown,
+                                          _lastPointer,
+                                          size,
+                                          buttons: 1,
+                                        );
+                                      }
+                                    : null,
+                                onPanUpdate: canPointer
+                                    ? (details) {
+                                        _lastPointer = details.localPosition;
+                                        final now = DateTime.now();
+                                        if (now.difference(_lastMoveAt) <
+                                            const Duration(milliseconds: 16)) {
+                                          return;
+                                        }
+                                        _lastMoveAt = now;
+                                        _sendPointer(
+                                          RemoteInputKind.pointerMove,
+                                          _lastPointer,
+                                          size,
+                                          buttons: 1,
+                                        );
+                                      }
+                                    : null,
+                                onPanEnd: canPointer
+                                    ? (_) => _sendPointer(
+                                        RemoteInputKind.pointerUp,
+                                        _lastPointer,
+                                        size,
+                                        buttons: 1,
+                                      )
+                                    : null,
+                                child: Image.memory(
+                                  frame.bytes,
+                                  fit: BoxFit.fill,
+                                  gaplessPlayback: true,
+                                  filterQuality: FilterQuality.low,
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+              ),
+            ],
+          ),
         ),
       ),
     );

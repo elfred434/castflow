@@ -5,6 +5,7 @@ import 'dart:io';
 import '../core/constants.dart';
 import '../core/models.dart';
 import '../protocol/protocol.dart';
+import '../remote/control_frame.dart';
 import '../remote/control_protocol.dart';
 import '../remote/transport_identity.dart';
 import '../remote/trust_protocol.dart';
@@ -30,19 +31,25 @@ class CastFlowClient {
   ControlCapabilities _remoteControlCapabilities = const ControlCapabilities(
     values: {},
   );
+  ActiveControlSession? _activeControlSession;
+  int _lastControlFrameSequence = -1;
   final Map<String, Completer<Envelope>> _pending = {};
   final StreamController<IncomingOffer> _offerController =
       StreamController<IncomingOffer>.broadcast();
   final StreamController<bool> _connectionController =
       StreamController<bool>.broadcast();
+  final StreamController<ControlVideoFrame> _controlFrameController =
+      StreamController<ControlVideoFrame>.broadcast();
 
   Stream<IncomingOffer> get offers => _offerController.stream;
   Stream<bool> get connectionChanges => _connectionController.stream;
+  Stream<ControlVideoFrame> get controlFrames => _controlFrameController.stream;
   bool get connected => _socket?.readyState == WebSocket.open;
   bool get authenticated => connected && _sessionToken.isNotEmpty;
   String get sessionToken => _sessionToken;
   ControlCapabilities get remoteControlCapabilities =>
       _remoteControlCapabilities;
+  ActiveControlSession? get activeControlSession => _activeControlSession;
 
   static Future<RemoteDevice?> probe(
     String host, {
@@ -266,6 +273,122 @@ class CastFlowClient {
     return _remoteControlCapabilities;
   }
 
+  Future<ActiveControlSession> requestControl({
+    required Set<ControlCapability> requested,
+    int width = 1280,
+    int height = 720,
+    int fps = 15,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final target = peer;
+    if (!authenticated || target == null) {
+      throw StateError('Authentification requise');
+    }
+    if (!target.secure) {
+      throw StateError('Le contrôle exige une connexion WSS');
+    }
+    if (requested.isEmpty ||
+        !remoteControlCapabilities.values.containsAll(requested)) {
+      throw StateError('Capacités de contrôle distantes insuffisantes');
+    }
+    final controlRequest = ControlRequest(
+      sessionId: secureId('ctrl'),
+      requested: requested,
+      width: width,
+      height: height,
+      fps: fps,
+    );
+    final response = await request(
+      Envelope(type: ControlMessageType.request, data: controlRequest.toJson()),
+      timeout: timeout,
+    );
+    if (response.type == ControlMessageType.deny) {
+      throw StateError(
+        response.data['reason']?.toString() ?? 'Contrôle refusé',
+      );
+    }
+    if (response.type != ControlMessageType.accept) {
+      throw StateError(
+        response.data['message']?.toString() ?? 'Réponse de contrôle invalide',
+      );
+    }
+    final sessionId = response.data['sessionId']?.toString() ?? '';
+    final token = response.data['controlToken']?.toString() ?? '';
+    final granted = ControlCapabilities.fromJson({
+      'values': response.data['granted'],
+    }).values;
+    if (sessionId != controlRequest.sessionId ||
+        token.isEmpty ||
+        granted.isEmpty ||
+        !requested.containsAll(granted)) {
+      throw StateError('Session de contrôle reçue invalide');
+    }
+    final session = ActiveControlSession(
+      id: sessionId,
+      controlToken: token,
+      granted: granted,
+      state: ControlSessionState.active,
+    );
+    _activeControlSession = session;
+    _lastControlFrameSequence = -1;
+    return session;
+  }
+
+  Future<void> sendControlInput(RemoteInputEvent event) async {
+    final session = _activeControlSession;
+    if (session == null || session.state != ControlSessionState.active) {
+      throw StateError('Aucune session de contrôle active');
+    }
+    final response = await request(
+      Envelope(
+        type: ControlMessageType.input,
+        data: {
+          'sessionId': session.id,
+          'controlToken': session.controlToken,
+          'event': event.toJson(),
+        },
+      ),
+    );
+    if (response.type != ControlMessageType.ready) {
+      throw StateError(
+        response.data['message']?.toString() ?? 'Entrée distante refusée',
+      );
+    }
+  }
+
+  Future<void> setControlPaused(bool paused) async {
+    final session = _activeControlSession;
+    if (session == null) throw StateError('Aucune session de contrôle');
+    final response = await request(
+      Envelope(
+        type: paused ? ControlMessageType.pause : ControlMessageType.resume,
+        data: {'sessionId': session.id, 'controlToken': session.controlToken},
+      ),
+    );
+    if (response.type != ControlMessageType.ready) {
+      throw StateError('Transition de contrôle refusée');
+    }
+    _activeControlSession = session.copyWith(
+      state: paused ? ControlSessionState.paused : ControlSessionState.active,
+    );
+  }
+
+  Future<void> stopControl() async {
+    final session = _activeControlSession;
+    if (session == null) return;
+    final response = await request(
+      Envelope(
+        type: ControlMessageType.stop,
+        data: {'sessionId': session.id, 'controlToken': session.controlToken},
+      ),
+    );
+    if (response.type != ControlMessageType.ready) {
+      throw StateError('Arrêt du contrôle refusé');
+    }
+    _activeControlSession = null;
+    _lastControlFrameSequence = -1;
+  }
+
   Future<Envelope> request(
     Envelope message, {
     Duration timeout = const Duration(seconds: 30),
@@ -285,6 +408,19 @@ class CastFlowClient {
   }
 
   void _handleMessage(Object? raw) {
+    if (raw is List<int>) {
+      try {
+        final frame = ControlVideoFrame.decode(raw);
+        if (frame.sessionId == _activeControlSession?.id &&
+            frame.sequence > _lastControlFrameSequence) {
+          _lastControlFrameSequence = frame.sequence;
+          _controlFrameController.add(frame);
+        }
+      } on FormatException {
+        // Ignorer une trame binaire invalide sans désynchroniser le canal JSON.
+      }
+      return;
+    }
     if (raw is! String) return;
     Envelope message;
     try {
@@ -295,6 +431,11 @@ class CastFlowClient {
     final replyTo = message.replyTo;
     if (replyTo != null) {
       _pending[replyTo]?.complete(message);
+    }
+    if (message.type == ControlMessageType.stop &&
+        message.data['sessionId'] == _activeControlSession?.id) {
+      _activeControlSession = null;
+      _lastControlFrameSequence = -1;
     }
     if (message.type == 'OFFER') {
       final rawFiles = message.data['files'];
@@ -318,6 +459,8 @@ class CastFlowClient {
     _secureSocketClient?.close(force: true);
     _secureSocketClient = null;
     _sessionToken = '';
+    _activeControlSession = null;
+    _lastControlFrameSequence = -1;
     for (final completer in _pending.values) {
       if (!completer.isCompleted) {
         completer.completeError(StateError('Connexion interrompue'));
@@ -597,7 +740,30 @@ class CastFlowClient {
     await disconnect();
     await _offerController.close();
     await _connectionController.close();
+    await _controlFrameController.close();
   }
+}
+
+class ActiveControlSession {
+  const ActiveControlSession({
+    required this.id,
+    required this.controlToken,
+    required this.granted,
+    required this.state,
+  });
+
+  final String id;
+  final String controlToken;
+  final Set<ControlCapability> granted;
+  final ControlSessionState state;
+
+  ActiveControlSession copyWith({ControlSessionState? state}) =>
+      ActiveControlSession(
+        id: id,
+        controlToken: controlToken,
+        granted: granted,
+        state: state ?? this.state,
+      );
 }
 
 ControlCapabilities _capabilitiesFrom(Object? raw) => raw is Map
